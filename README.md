@@ -1,14 +1,3 @@
-# Perseo
-
-[![R](https://img.shields.io/badge/R-%3E=4.2.0-blue?style=flat&logo=R)](https://www.r-project.org/)
-[![gamlss](https://img.shields.io/badge/GAMLSS-supported-lightgrey?logo=R&style=flat)](https://www.gamlss.com/)
-[![tidyverse](https://img.shields.io/badge/tidyverse-compatible-brightgreen?style=flat&logo=tidyverse)](https://www.tidyverse.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![version](https://img.shields.io/badge/version-0.0.1-orange?style=flat&logo=GitHub)](https://github.com/your_username/gamlssOmics)
-
-
----
-
 # PERSEO: Model-Aware Differential Expression for Omics Data
 
 [![R](https://img.shields.io/badge/R-%3E=4.2.0-blue?style=flat&logo=R)](https://www.r-project.org/)

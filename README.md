@@ -27,6 +27,35 @@ Tailored for high-dimensional **omics datasets** where modeling assumptions vary
 
 ## Functions
 
+### `find_families()`
+
+This function helps identify the best-fitting GAMLSS families for a representative subset of features (e.g, genes) using AIC. It is useful to explore the most appropiate distributions to be used in subsequent modeling
+
+```r
+top_families <- find_families(
+  counts_matrix = counts_filtered,
+  n_genes = 100,
+  top_n = 4,
+  verbose = TRUE
+  )
+```
+Example output 
+
+```r
+Running model fitting on 100 genes using parallel execution...
+
+===== Summary Report =====
+Genes analyzed: 100
+Genes skipped (all 0s): 5
+Genes successfully fitted: 95
+Most frequent family: TF (89 genes)
+ Top 4 families:
+fitted
+ TF NBI  BI 
+ 89   5   1 
+```
+
+
 ### `fit_gamlss_models()`
 
 Fits multiple GAMLSS models to a single feature across different families.

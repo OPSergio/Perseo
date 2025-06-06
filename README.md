@@ -54,21 +54,55 @@ fitted
  TF NBI  BI 
  89   5   1 
 ```
-
+---
 
 ### `fit_gamlss_models()`
 
-Fits multiple GAMLSS models to a single feature across different families.
+This function fits multiple GAMLSS models across genes (features) and selects the best-fitting distribution per gene based on user-defined criteria (AIC, BIC, GAIC, or logLik). It is designed to be scalable and memory-efficient by only storing summary statistics and diagnostics, not full models.
 
 ```r
-fit_gamlss_models(y, X, families = c("NBI", "GA", "NO", "PO"), timeout = 10, verbose = TRUE)
+X <- model.matrix(~ group, data = sample_metadata)
+
+# Define candidate families (can be from top_families or fixed list)
+families <- c("TF", "NBI", "BI", "NO")
+
+# Run GAMLSS fitting
+results_tbl <- fit_gamlss_models(
+  counts_matrix = counts_filtered,
+  X = X,
+  families = families,
+  criterion = "GAIC",
+  timeout = 5,
+  verbose = TRUE
+)
+
 ```
 
-- `y`: numeric vector of expression/abundance values
+- `counts_matrix`: matrix of expression/abundance values
 - `X`: design matrix
 - `families`: list of distribution families to test
 - `timeout`: time in seconds for each model
 - `verbose`: print feedback
+
+Output
+
+```r
+| gene  | best\_family | AIC   | BIC   | GAIC3 | logLik | df  | ks\_p | skewness | kurtosis |
+| ----- | ------------ | ----- | ----- | ----- | ------ | --- | ----- | -------- | -------- |
+| BRCA1 | TF           | 512.3 | 520.1 | 517.9 | -252.1 | 4   | 0.72  | 0.03     | -0.89    |
+| TP53  | NBI          | 438.7 | 447.4 | 443.2 | -215.3 | 5   | 0.59  | -0.18    | 1.02     |
+| ...   | ...          | ...   | ...   | ...   | ...    | ... | ...   | ...      | ...      |
+```
+
+When `verbose = TRUE`, a final report is printed: 
+
+```
+── Fitting GAMLSS models across genes ──────────────────────────────────────────────
+Models fitted for 95 of 100 genes
+5 genes skipped due to all-zero counts
+Most frequent family: TF (89 genes)
+
+```
 
 ---
 

@@ -1,4 +1,7 @@
-# PERSEO: Model-Aware Differential Expression for Omics Data
+<h1 align="left">
+  PERSEO: Model-Aware Differential Expression for Omics Data
+  <img src="assets/logo_perseo.png" alt="Perseo Logo" width="150" align="right"/>
+</h1>
 
 [![R](https://img.shields.io/badge/R-%3E=4.2.0-blue?style=flat&logo=R)](https://www.r-project.org/)
 [![gamlss](https://img.shields.io/badge/GAMLSS-supported-lightgrey?logo=R&style=flat)](https://www.gamlss.com/)

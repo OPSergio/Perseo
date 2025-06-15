@@ -1,13 +1,28 @@
-<p align="right">
-  <img src="assets/logo_perseo.png" alt="Perseo Logo" width="120">
-</p>
+<table width="100%">
+<tr>
+  <td>
+    <h1>PERSEO: Model-Aware Differential Expression for Omics Data</h1>
+    <p>
+      <a href="https://www.r-project.org/">
+        <img src="https://img.shields.io/badge/R-%3E=4.2.0-blue?style=flat&logo=R" alt="R">
+      </a>
+      <a href="https://www.gamlss.com/">
+        <img src="https://img.shields.io/badge/GAMLSS-supported-lightgrey?logo=R&style=flat" alt="GAMLSS">
+      </a>
+      <a href="https://www.tidyverse.org/">
+        <img src="https://img.shields.io/badge/tidyverse-compatible-brightgreen?style=flat&logo=tidyverse" alt="tidyverse">
+      </a>
+      <a href="https://github.com/OPSergio/Perseo">
+        <img src="https://img.shields.io/badge/version-0.0.1-orange?style=flat&logo=GitHub" alt="version">
+      </a>
+    </p>
+  </td>
+  <td align="right">
+    <img src="assets/logo_perseo.png" alt="Perseo Logo" width="140">
+  </td>
+</tr>
+</table>
 
-# PERSEO: Model-Aware Differential Expression for Omics Data
-
-[![R](https://img.shields.io/badge/R-%3E=4.2.0-blue?style=flat&logo=R)](https://www.r-project.org/)
-[![gamlss](https://img.shields.io/badge/GAMLSS-supported-lightgrey?logo=R&style=flat)](https://www.gamlss.com/)
-[![tidyverse](https://img.shields.io/badge/tidyverse-compatible-brightgreen?style=flat&logo=tidyverse)](https://www.tidyverse.org/)
-[![version](https://img.shields.io/badge/version-0.0.1-orange?style=flat&logo=GitHub)](https://github.com/OPSergio/Perseo)
 
 ---
 

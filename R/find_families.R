@@ -49,7 +49,7 @@ transform_for_family <- function(y, fam, strategy = "safe", eps = 1e-6) {
   return(y)
 }
 
-find_families <- function(counts_matrix, n_genes = 200, top_n = 4, families = NULL, verbose = TRUE) {
+find_families <- function(counts_matrix, n_genes = 200, top_n = 4, families = NULL, verbose = TRUE, strategy = "safe") {
   if (is.null(families)) {
     families <- c("BE", "BEO", "BEINF", "BEZI",
                   "BI", "BB", "NBI",

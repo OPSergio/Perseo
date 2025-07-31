@@ -1,5 +1,5 @@
 
-transform_for_family <- function(y, fam) {
+transform_for_family <- function(y, fam, strategy = "safe", eps = 1e-6) {
   if (fam %in% c("GA", "GG", "LOGNO", "IG")) {
     y[y <= 0] <- NA
     return(y)

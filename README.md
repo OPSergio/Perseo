@@ -92,7 +92,7 @@ results_tbl <- fit_gamlss_models(
 ```
 
 - `counts_matrix`: matrix of expression/abundance values
-- `X`: design matrix
+- `X`: design matrix created using `model.matrix()`. It encodes the explanatory variables (e.g., experimental groups, batches, covariates) that will be used as predictors in the GAMLSS models. The design matrix must have one row per sample (matching the number of columns in `counts_matrix`) and one column per covariate or intercept term. Example: `X <- model.matrix(~ group + batch, data = sample_metadata)`.
 - `families`: list of distribution families to test
 - `timeout`: time in seconds for each model
 - `verbose`: print feedback

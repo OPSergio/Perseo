@@ -16,7 +16,8 @@
 source("R/utils_transformations.R") # Load utility functions (temporal)
 fit_gamlss_models <- function(counts_matrix, X, families = c("PO", "NBI", "NO", "GA"),
                               criterion = c("AIC", "BIC", "GAIC", "logLik"),
-                              timeout = 10, verbose = TRUE) {
+                              timeout = 10, verbose = TRUE,
+                              strategy = "safe", eps = 1e-6) {
   criterion <- match.arg(criterion)
   
   old_plan <- future::plan()
@@ -33,33 +34,13 @@ fit_gamlss_models <- function(counts_matrix, X, families = c("PO", "NBI", "NO", 
     list(ks_p = ks, skewness = skew, kurtosis = kurt)
   }
   
-
-  # Family-aware transformation
-  transform_for_family <- function(y, fam) {
-    if (fam %in% c("GA", "GG", "LOGNO", "IG")) {
-      y[y <= 0] <- NA
-      return(y)
-    } else if (fam %in% c("PO", "NBI", "ZINBI", "ZIP", "ZIP2")) {
-      y[y < 0] <- NA
-      return(round(y))
-    } else if (fam %in% c("BE", "BEINF", "BEO", "BEZI", "BEo", "BEINF0")) {
-      y <- (y - min(y)) / (max(y) - min(y) + 1e-8)
-      y[y <= 0] <- NA
-      y[y >= 1] <- NA
-      return(y)
-    } else if (fam %in% c("NO", "TF", "GU")) {
-      return(scale(y))
-    } else {
-      return(y)
-    }
-  }
   
   fit_one_gene <- function(gene_name, y) {
     if (all(y == 0)) return(NULL)
     
     results <- list()
     for (fam in families) {
-      y_trans <- transform_for_family(y, fam, strategy = "safe", eps = 1e-6)
+      y_trans <- transform_for_family(y, fam, strategy = strategy, eps = eps)
       
       fit <- tryCatch({
         R.utils::withTimeout({

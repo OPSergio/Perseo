@@ -13,6 +13,7 @@
 #'
 #' @return A tibble with gene name, selected family, scores, and diagnostics
 #' @export
+source("R/utils_transformations.R") # Load utility functions (temporal)
 fit_gamlss_models <- function(counts_matrix, X, families = c("PO", "NBI", "NO", "GA"),
                               criterion = c("AIC", "BIC", "GAIC", "logLik"),
                               timeout = 10, verbose = TRUE) {

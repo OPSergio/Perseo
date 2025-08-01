@@ -59,7 +59,7 @@ fit_gamlss_models <- function(counts_matrix, X, families = c("PO", "NBI", "NO", 
     
     results <- list()
     for (fam in families) {
-      y_trans <- transform_for_family(y, fam)
+      y_trans <- transform_for_family(y, fam, strategy = "safe", eps = 1e-6)
       
       fit <- tryCatch({
         R.utils::withTimeout({

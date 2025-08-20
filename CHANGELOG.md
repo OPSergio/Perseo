@@ -19,8 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - `find_families()` was updated to keep transformed `y_t` for further visualization.
+- Default information criterion switched from **AIC** to **GAIC (k = log n)** for robustness against overfitting.
+- Added empirical filters to avoid testing inflated or overparameterized families (e.g., BEINF, BEZI, GG, NBI) when no support is detected.
+- `find_families()` was updated to keep transformed `y_t` for further visualization.
+
 
 ### Fixed
+
+- Low sensitivity for bounded distributions (e.g., Beta) by enforcing strict, support-aware transformations.
 
 ### Deprecated
 

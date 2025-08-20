@@ -71,7 +71,7 @@ fitted
  TF NBI  BI 
  89   5   1 
 ```
-
+---
 
 ### `fit_gamlss_models()`
 

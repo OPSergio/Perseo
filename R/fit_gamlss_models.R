@@ -1,17 +1,55 @@
-#' Fit GAMLSS models across multiple genes (enhanced version)
+#' Fit GAMLSS models per feature (family selection with common mask + Jacobian)
 #'
-#' Applies GAMLSS models to each gene (row-wise in expression matrix) and selects the best model per gene
-#' according to a selected criterion (AIC, BIC, GAIC(k=3), or log-likelihood).
-#' Only model diagnostics and scores are stored, not the full model, to keep memory usage low.
+#' Compares candidate GAMLSS families per feature on the same set of observations
+#' (common mask), using strict, family-specific transformations and Jacobian
+#' correction for fair IC comparison. Selects the best family by GAIC/BIC/AIC and
+#' returns per-term statistics from `summary(fit, what = "mu")` (no VCOV dependency).
+#' Parallelization over features is supported via `future.apply`, with optional
+#' progress bars via `progressr`.
 #'
-#' @param counts_matrix Numeric matrix: expression values (genes x samples)
-#' @param X Model matrix
-#' @param families Character vector of GAMLSS family names
-#' @param criterion Character: selection criterion, one of "AIC", "BIC", "GAIC", "logLik"
-#' @param timeout Max time (sec) per model fit
-#' @param verbose Logical, whether to print progress messages
+#' @param counts_matrix numeric matrix (features x samples).
+#' @param design_matrix data.frame or matrix of covariates with
+#'   `nrow = ncol(counts_matrix)`. If a `"(Intercept)"` column is present it is
+#'   removed to avoid a double intercept in `y ~ .`.
+#' @param candidate_families character vector of GAMLSS families to test
+#'   (e.g. `c("PO","NBI","GA","GG","IG","LOGNO","NO","TF")`).
+#' @param criterion one of `"GAIC"`, `"BIC"`, or `"AIC"`; default `"GAIC"`.
+#' @param gaic_k numeric penalty used when `criterion = "GAIC"`. If `NULL`,
+#'   uses `log(n_valid_obs)`.
+#' @param min_n integer minimum number of valid observations after applying the
+#'   common mask; features below this threshold are skipped. Default `5`.
+#' @param p_adjust method passed to `p.adjust()` to compute FDR per term across
+#'   features (default `"BH"`).
+#' @param contrast_matrix ignored in this no-VCOV mode; included for future API
+#'   compatibility. A warning is emitted if provided.
+#' @param workers integer number of parallel workers. If `> 1`, a
+#'   `multisession` plan is installed for the duration of the call. Default `1`.
+#' @param show_progress logical; show a `progressr` progress bar. Default `TRUE`.
+#' @param progress_label character label shown next to the progress bar.
 #'
-#' @return A tibble with gene name, selected family, scores, and diagnostics
+#' @return A list with:
+#'   \describe{
+#'     \item{results}{tibble with columns: `feature`, `term`, `effect`, `se`,
+#'       `stat`, `pval`, `padj`.}
+#'     \item{selection}{tibble with columns: `feature`, `best_family`,
+#'       `n_valid_obs`, `ic_value` (Jacobian-corrected IC).}
+#'   }
+#'
+#' @details Family comparison uses strict transforms, a common mask across
+#' families, and Jacobian correction so ICs are comparable on the original data
+#' scale. Coefficients/p-values are taken from `summary(., what = "mu")`;
+#' general contrasts are not computed in this mode.
+#'
+#' @examples
+#' \dontrun{
+#' fit <- fit_gamlss_models(
+#'   counts_matrix, design, c("NBI","GG","LOGNO"),
+#'   criterion = "BIC", min_n = 20,
+#'   workers = max(1, future::availableCores()-1),
+#'   show_progress = TRUE
+#' )
+#' }
+#' @seealso find_families, transform_for_family_strict
 #' @export
 source("R/utils_transformations.R") # Load utility functions (temporal)
 fit_gamlss_models <- function(counts_matrix, X, families = c("PO", "NBI", "NO", "GA"),

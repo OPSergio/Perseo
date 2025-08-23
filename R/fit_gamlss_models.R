@@ -51,107 +51,269 @@
 #' }
 #' @seealso find_families, transform_for_family_strict
 #' @export
-source("R/utils_transformations.R") # Load utility functions (temporal)
-fit_gamlss_models <- function(counts_matrix, X, families = c("PO", "NBI", "NO", "GA"),
-                              criterion = c("AIC", "BIC", "GAIC", "logLik"),
-                              timeout = 10, verbose = TRUE,
-                              strategy = "safe", eps = 1e-6) {
+fit_gamlss_models <- function(counts_matrix,
+                              design_matrix,
+                              candidate_families,
+                              criterion = c("GAIC","BIC","AIC"),
+                              gaic_k = NULL,
+                              min_n = 5,
+                              contrast_matrix = NULL,
+                              p_adjust = "BH",
+                              workers = 1,
+                              show_progress = TRUE,
+                              progress_label = "Fitting features") {
   criterion <- match.arg(criterion)
-  
-  old_plan <- future::plan()
-  on.exit(future::plan(old_plan), add = TRUE)
-  future::plan(multisession, workers = availableCores())
-  
-
-  resid_diagnostics <- function(model, y) {
-    res <- tryCatch(residuals(model, type = "normalized"), error = function(e) rep(NA, length(y)))
-    valid_res <- res[is.finite(res)]
-    ks <- tryCatch(ks.test(valid_res, "pnorm")$p.value, error = function(e) NA)
-    skew <- tryCatch(if (length(unique(valid_res)) > 1) e1071::skewness(valid_res, na.rm = TRUE) else NA, error = function(e) NA)
-    kurt <- tryCatch(if (length(unique(valid_res)) > 1) e1071::kurtosis(valid_res, na.rm = TRUE) else NA, error = function(e) NA)
-    list(ks_p = ks, skewness = skew, kurtosis = kurt)
+  if (!is.null(contrast_matrix)) {
+    warning("contrast_matrix is ignored in no-VCOV mode; returning per-coefficient tests only.")
   }
   
+  # --- helpers ---
+  penalty_value <- function(n_valid_obs) switch(
+    criterion,
+    "AIC"  = 2,
+    "BIC"  = log(n_valid_obs),
+    "GAIC" = if (is.null(gaic_k)) log(n_valid_obs) else gaic_k
+  )
+  get_family_object <- function(family_name) {
+    if (exists(family_name, where = asNamespace("gamlss.dist"), inherits = FALSE)) {
+      get(family_name, envir = asNamespace("gamlss.dist"))()
+    } else if (exists(family_name, mode = "function")) {
+      get(family_name)()
+    } else NULL
+  }
+  sanitize_design <- function(dm) {
+    dm <- as.data.frame(dm)
+    if ("(Intercept)" %in% colnames(dm)) {
+      dm <- dm[, setdiff(colnames(dm), "(Intercept)"), drop = FALSE]
+    }
+    dm
+  }
+  # Robust extractor of per-coefficient table for mu (Estimate, SE, t, p)
+  extract_mu_coef_table <- function(fit) {
+    s <- suppressWarnings({
+      s_obj <- NULL
+      utils::capture.output({ s_obj <- summary(fit, what = "mu") }, file = NULL)
+      s_obj
+    })
+    if (is.data.frame(s) || is.matrix(s)) {
+      tab <- as.data.frame(s)
+      names(tab) <- sub("Std\\.Error", "Std. Error", names(tab))
+      if (!"Pr(>|t|)" %in% names(tab)) {
+        idx <- which(tolower(names(tab)) %in% c("p-value","p.value","pr(>|t|)"))
+        if (length(idx) == 1) names(tab)[idx] <- "Pr(>|t|)"
+      }
+      if (!"Estimate"   %in% names(tab)) tab[["Estimate"]]   <- NA_real_
+      if (!"Std. Error" %in% names(tab)) tab[["Std. Error"]] <- NA_real_
+      if (!"t value"    %in% names(tab)) tab[["t value"]]    <- tab[["Estimate"]]/tab[["Std. Error"]]
+      if (!"Pr(>|t|)"   %in% names(tab)) tab[["Pr(>|t|)"]]   <- NA_real_
+      term_names <- rownames(tab)
+      if (is.null(term_names)) {
+        if ("term" %in% names(tab)) term_names <- as.character(tab$term) else term_names <- names(coef(fit, what = "mu"))
+      }
+      return(tibble::tibble(
+        term   = term_names,
+        effect = as.numeric(tab[["Estimate"]]),
+        se     = as.numeric(tab[["Std. Error"]]),
+        stat   = as.numeric(tab[["t value"]]),
+        pval   = as.numeric(tab[["Pr(>|t|)"]])
+      ))
+    }
+    if (is.list(s)) {
+      candidates <- list(s$coef.table, s$coefficients, s$coef, s$coeftable)
+      for (tab in candidates) {
+        if (!is.null(tab)) {
+          tab <- as.data.frame(tab)
+          names(tab) <- sub("Std\\.Error", "Std. Error", names(tab))
+          if (!"Pr(>|t|)" %in% names(tab)) {
+            idx <- which(tolower(names(tab)) %in% c("p-value","p.value","pr(>|t|)"))
+            if (length(idx) == 1) names(tab)[idx] <- "Pr(>|t|)"
+          }
+          if (!"Estimate"   %in% names(tab)) tab[["Estimate"]]   <- NA_real_
+          if (!"Std. Error" %in% names(tab)) tab[["Std. Error"]] <- NA_real_
+          if (!"t value"    %in% names(tab)) tab[["t value"]]    <- tab[["Estimate"]]/tab[["Std. Error"]]
+          if (!"Pr(>|t|)"   %in% names(tab)) tab[["Pr(>|t|)"]]   <- NA_real_
+          term_names <- rownames(tab)
+          if (is.null(term_names)) {
+            if ("term" %in% names(tab)) term_names <- as.character(tab$term) else term_names <- names(coef(fit, what = "mu"))
+          }
+          return(tibble::tibble(
+            term   = term_names,
+            effect = as.numeric(tab[["Estimate"]]),
+            se     = as.numeric(tab[["Std. Error"]]),
+            stat   = as.numeric(tab[["t value"]]),
+            pval   = as.numeric(tab[["Pr(>|t|)"]])
+          ))
+        }
+      }
+    }
+    est <- coef(fit, what = "mu")
+    tibble::tibble(
+      term   = names(est),
+      effect = as.numeric(est),
+      se     = NA_real_,
+      stat   = NA_real_,
+      pval   = NA_real_
+    )
+  }
   
-  fit_one_gene <- function(gene_name, y) {
-    if (all(y == 0)) return(NULL)
+  # --- checks & prep (shared across workers) ---
+  feature_ids <- rownames(counts_matrix)
+  stopifnot(is.matrix(counts_matrix))
+  stopifnot(ncol(counts_matrix) == nrow(design_matrix))
+  
+  design_matrix <- sanitize_design(design_matrix)
+  complete_rows <- stats::complete.cases(design_matrix)
+  if (!all(complete_rows)) {
+    message(sum(!complete_rows), " rows with NA in design; they will be dropped via the common mask.")
+  }
+  
+  # --- per-feature worker function ---
+  process_one_feature <- function(feature_id, progressor = NULL) {
+    y_raw <- as.numeric(counts_matrix[feature_id, ])
     
-    results <- list()
-    for (fam in families) {
-      y_trans <- transform_for_family(y, fam, strategy = strategy, eps = eps)
-      
-      fit <- tryCatch({
-        R.utils::withTimeout({
-          model <- gamlss(y_trans ~ X - 1, family = fam, trace = FALSE)
-          diag <- resid_diagnostics(model, y_trans)
-          list(
-            family = fam,
-            AIC = AIC(model),
-            BIC = BIC(model),
-            GAIC3 = GAIC(model, k = 3),
-            logLik = logLik(model),
-            df = model$df.fit,
-            residuals = diag
-          )
-        }, timeout = timeout, onTimeout = "silent")
-      }, error = function(e) NULL)
-      
-      if (!is.null(fit)) results[[fam]] <- fit
+    # 1) strict transforms per candidate
+    transformed_by_family <- lapply(candidate_families, function(fam) {
+      transform_for_family_strict(y_raw, fam)
+    })
+    names(transformed_by_family) <- candidate_families
+    
+    # Common mask: domain-valid AND design complete-cases
+    family_masks <- lapply(transformed_by_family, `[[`, "mask")
+    common_mask  <- Reduce(`&`, family_masks) & complete_rows
+    n_valid_obs  <- sum(common_mask, na.rm = TRUE)
+    
+    if (n_valid_obs < min_n) {
+      if (!is.null(progressor)) progressor(message = feature_id)
+      return(list(
+        selection = tibble::tibble(
+          feature     = feature_id,
+          best_family = NA_character_,
+          n_valid_obs = n_valid_obs,
+          ic_value    = NA_real_
+        ),
+        results = tibble::tibble(
+          feature  = feature_id,
+          term     = NA_character_,
+          effect   = NA_real_,
+          se       = NA_real_,
+          stat     = NA_real_,
+          pval     = NA_real_
+        )
+      ))
     }
     
-    if (length(results) == 0) return(NULL)
+    penalty <- penalty_value(n_valid_obs)
+    ic_by_family   <- rep(Inf, length(candidate_families)); names(ic_by_family) <- candidate_families
+    fits_by_family <- vector("list", length(candidate_families)); names(fits_by_family) <- candidate_families
     
-    best <- switch(criterion,
-                   AIC = which.min(map_dbl(results, "AIC")),
-                   BIC = which.min(map_dbl(results, "BIC")),
-                   GAIC = which.min(map_dbl(results, "GAIC3")),
-                   logLik = which.max(map_dbl(results, "logLik")))
+    for (family_name in candidate_families) {
+      tr <- transformed_by_family[[family_name]]
+      y_trans  <- tr$y[common_mask]
+      logJ_sum <- sum(tr$logJ_per_obs[common_mask])
+      
+      X_masked <- design_matrix[common_mask, , drop = FALSE]
+      data_fit <- cbind.data.frame(y = y_trans, X_masked)
+      
+      fam_obj <- get_family_object(family_name)
+      if (is.null(fam_obj)) next
+      
+      fit_try <- try({
+        fit_tmp <- NULL
+        utils::capture.output({
+          fit_tmp <- gamlss::gamlss(
+            y ~ .,
+            data   = data_fit,
+            family = fam_obj,
+            trace  = FALSE
+          )
+        }, file = NULL)
+        fit_tmp
+      }, silent = TRUE)
+      if (inherits(fit_try, "try-error") || is.null(fit_try)) next
+      fit <- fit_try
+      fits_by_family[[family_name]] <- fit
+      
+      log_lik <- tryCatch(as.numeric(stats::logLik(fit)), error = function(e) NA_real_)
+      if (!is.finite(log_lik)) next
+      df_fit  <- fit$df.fit
+      base_ic <- (-2 * log_lik) + penalty * df_fit
+      ic_by_family[family_name] <- base_ic - 2 * logJ_sum
+    }
     
-    best_fit <- results[[best]]
-    tibble(
-      gene = gene_name,
-      best_family = best_fit$family,
-      AIC = best_fit$AIC,
-      BIC = best_fit$BIC,
-      GAIC3 = best_fit$GAIC3,
-      logLik = best_fit$logLik,
-      df = best_fit$df,
-      ks_p = best_fit$residuals$ks_p,
-      skewness = best_fit$residuals$skewness,
-      kurtosis = best_fit$residuals$kurtosis
+    if (all(!is.finite(ic_by_family))) {
+      if (!is.null(progressor)) progressor(message = feature_id)
+      return(list(
+        selection = tibble::tibble(
+          feature     = feature_id,
+          best_family = NA_character_,
+          n_valid_obs = n_valid_obs,
+          ic_value    = NA_real_
+        ),
+        results = tibble::tibble(
+          feature  = feature_id,
+          term     = NA_character_,
+          effect   = NA_real_,
+          se       = NA_real_,
+          stat     = NA_real_,
+          pval     = NA_real_
+        )
+      ))
+    }
+    
+    best_family <- names(which.min(ic_by_family))
+    best_fit    <- fits_by_family[[best_family]]
+    coef_tbl    <- extract_mu_coef_table(best_fit)
+    
+    if (!is.null(progressor)) progressor(message = feature_id)
+    
+    list(
+      selection = tibble::tibble(
+        feature     = feature_id,
+        best_family = best_family,
+        n_valid_obs = n_valid_obs,
+        ic_value    = ic_by_family[best_family]
+      ),
+      results = coef_tbl |> dplyr::mutate(feature = feature_id, .before = 1)
     )
   }
   
-  if (verbose) cli::cli_h1("Fitting GAMLSS models across genes")
-  gene_names <- rownames(counts_matrix)
-  gene_list <- asplit(counts_matrix, MARGIN = 1)
-  
-  results <- furrr::future_map2_dfr(
-    .x = gene_names,
-    .y = gene_list,
-    .f = fit_one_gene,
-    .progress = verbose,
-    .options = furrr::furrr_options(
-      seed = TRUE,
-      packages = c("dplyr", "gamlss", "e1071", "tibble")
-    )
-  )
-  
-  if (verbose) {
-    cli::cli_h2("GAMLSS Summary")
-    total_genes <- nrow(counts_matrix)
-    fitted_genes <- nrow(results)
-    skipped_genes <- total_genes - fitted_genes
-    top_families <- sort(table(results$best_family), decreasing = TRUE)
-    most_common <- names(top_families)[1]
-    
-    cli::cli_text("Genes analyzed: {total_genes}")
-    cli::cli_text("Genes fitted successfully: {fitted_genes}")
-    cli::cli_text("Genes skipped (e.g., all zeros or NA): {skipped_genes}")
-    cli::cli_text("Most frequent family: {most_common} ({top_families[1]} genes)")
-    cli::cli_text("Top families:")
-    print(top_families)
+  # --- parallel plan (if requested) ---
+  if (workers > 1) {
+    old_plan <- future::plan()
+    on.exit(future::plan(old_plan), add = TRUE)
+    future::plan(future::multisession, workers = workers)
   }
   
-  return(results)
+  # --- run with/without progress bar ---
+  run_apply <- function(fun) {
+    if (workers > 1) {
+      future.apply::future_lapply(feature_ids, fun, future.seed = TRUE)
+    } else {
+      lapply(feature_ids, fun)
+    }
+  }
+  
+  if (isTRUE(show_progress)) {
+    out_list <- progressr::with_progress({
+      p <- progressr::progressor(steps = length(feature_ids), message = progress_label)
+      run_apply(function(fid) process_one_feature(fid, progressor = p))
+    })
+  } else {
+    out_list <- run_apply(function(fid) process_one_feature(fid, progressor = NULL))
+  }
+  
+  # --- bind & adjust p-values by term ---
+  selection <- dplyr::bind_rows(lapply(out_list, `[[`, "selection"))
+  results   <- dplyr::bind_rows(lapply(out_list, `[[`, "results"))
+  
+  if (nrow(results) > 0 && "term" %in% names(results)) {
+    results <- results |>
+      dplyr::group_by(term) |>
+      dplyr::mutate(padj = p.adjust(pval, method = p_adjust)) |>
+      dplyr::ungroup()
+  } else {
+    results$padj <- NA_real_
+  }
+  
+  list(results = results, selection = selection)
 }

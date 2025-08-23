@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Default information criterion switched from **AIC** to **GAIC (k = log n)** for robustness against overfitting.
 - Added empirical filters to avoid testing inflated or overparameterized families (e.g., BEINF, BEZI, GG, NBI) when no support is detected.
 - `find_families()` was updated to keep transformed `y_t` for further visualization.
+- Reimagined `fit_gamlss_models()`: ensures **best-model selection** via IC with **common mask + Jacobian correction**, and **consistent extraction** of per-term stats (`Estimate`, `SE`, `t`, `p`, `FDR`) from `summary(..., what = "mu")`. Adds **feature-level parallelization** (`workers`) and **progress bars** (`progressr`). Removes dependency on `vcov`.
 
 
 ### Fixed

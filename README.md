@@ -311,6 +311,5 @@ Open an issue or pull request with suggestions, improvements, or feedback. This 
 
 ## License
 
-This project is licensed under the MIT License — see the `LICENSE` file for details.
-
-SPDX: MIT
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0) —
+see the `LICENSE` file for details.

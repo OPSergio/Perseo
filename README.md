@@ -311,4 +311,6 @@ Open an issue or pull request with suggestions, improvements, or feedback. This 
 
 ## License
 
-The license will be specified soon. We welcome feedback on open-source licensing options.
+This project is licensed under the MIT License — see the `LICENSE` file for details.
+
+SPDX: MIT

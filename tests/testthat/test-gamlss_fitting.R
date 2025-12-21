@@ -64,8 +64,7 @@ test_that("compute_jacobian_corrected_ic computes correctly", {
       
       result <- compute_jacobian_corrected_ic(fit, penalty, logJ_sum)
       expect_equal(result, expected_ic)
-    },
-    .package = "base"
+    }
   )
 })
 

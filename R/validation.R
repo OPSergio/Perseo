@@ -10,6 +10,10 @@ validate_counts_matrix <- function(counts_matrix, min_features = NULL) {
     stop("counts_matrix must be a matrix; got ", class(counts_matrix)[1])
   }
   
+  if (!is.numeric(counts_matrix)) {
+    stop("counts_matrix must be numeric; got ", typeof(counts_matrix))
+  }
+  
   if (nrow(counts_matrix) == 0 || ncol(counts_matrix) == 0) {
     stop("counts_matrix must have at least one row and one column.")
   }
@@ -63,8 +67,8 @@ validate_design_matrix <- function(design_matrix, n_samples) {
 #' @keywords internal
 validate_criterion_args <- function(criterion, gaic_k = NULL) {
   if (!is.null(gaic_k)) {
-    if (!is.numeric(gaic_k) || length(gaic_k) != 1 || gaic_k <= 0) {
-      stop("gaic_k must be a positive numeric scalar or NULL.")
+    if (!is.numeric(gaic_k) || length(gaic_k) != 1 || gaic_k < 0) {
+      stop("gaic_k must be >= 0 or NULL.")
     }
   }
   

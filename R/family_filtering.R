@@ -30,14 +30,15 @@
 #' and may cause convergence issues but can be useful for exploratory analysis.
 #'
 #' @keywords internal
-filter_candidate_families <- function(y,
-                                      families,
+filter_candidate_families <- function(feature_vec,
+                                      candidate_families,
                                       group_by_support = TRUE,
                                       filter_beta_inflated = TRUE,
                                       thr_zero = 0.005,
                                       thr_one = 0.005) {
-  support <- infer_support(y)
-  eligible_families <- families
+  support <- infer_support(feature_vec)
+  eligible_families <- candidate_families
+  y <- feature_vec
 
   # Support-based filtering (preserves group_by_support = FALSE)
   if (isTRUE(group_by_support)) {
@@ -59,7 +60,11 @@ filter_candidate_families <- function(y,
     }
   }
 
-  list(families = eligible_families, support = support)
+  bd_vec <- if (any(is_binomial_family(eligible_families))) {
+    infer_binomial_denominator(feature_vec)
+  } else NULL
+  
+  list(families_to_test = eligible_families, support = support, bd_vec = bd_vec)
 }
 
 
@@ -80,7 +85,7 @@ is_binomial_family <- function(family_name) {
 #' fallback to per-feature inference when denominators are not provided.
 #'
 #' @param y Numeric vector with original feature counts.
-#' @param common_mask Logical mask indicating valid observations for fitting.
+#' @param common_mask Optional logical mask indicating valid observations for fitting.
 #' @param binom_bd_user User-supplied binomial denominator: NULL (infer),
 #'   numeric scalar (recycle), or numeric vector (length = total samples).
 #' @param n_samples Integer total number of samples in the original matrix.
@@ -95,9 +100,14 @@ is_binomial_family <- function(family_name) {
 #'
 #' @keywords internal
 infer_binomial_denominator <- function(y,
-                                       common_mask,
+                                       common_mask = NULL,
                                        binom_bd_user = NULL,
-                                       n_samples) {
+                                       n_samples = NULL) {
+  # Default mask to all valid
+  if (is.null(common_mask)) {
+    common_mask <- is.finite(y)
+  }
+  
   n_valid <- sum(common_mask)
   if (n_valid == 0) {
     return(NULL)
@@ -108,7 +118,7 @@ infer_binomial_denominator <- function(y,
     if (length(binom_bd_user) == 1L) {
       return(rep(as.numeric(binom_bd_user), n_valid))
     }
-    if (length(binom_bd_user) == n_samples) {
+    if (!is.null(n_samples) && length(binom_bd_user) == n_samples) {
       return(as.numeric(binom_bd_user[common_mask]))
     }
     warning(
@@ -148,6 +158,13 @@ infer_binomial_denominator <- function(y,
 #' @return Logical; TRUE if feature should be skipped.
 #' @keywords internal
 has_insufficient_variation <- function(y) {
-  finite_y <- y[is.finite(y)]
-  length(finite_y) == 0 || length(unique(finite_y)) <= 1
+  y_finite <- y[is.finite(y)]
+  n_unique <- length(unique(y_finite))
+  # Constant or nearly constant (only 2 values with one rare)
+  if (n_unique < 2) return(TRUE)
+  if (n_unique == 2) {
+    counts <- table(y_finite)
+    return(min(counts) == 1)  # One value appears only once
+  }
+  FALSE
 }

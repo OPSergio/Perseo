@@ -29,15 +29,15 @@ Automated model selection and differential expression analysis for omics data us
 - [Why PERSEO?](#why-perseo)
 - [Installation](#installation)
 - [Data Requirements](#data-requirements)
-- [Workflow Overview](#workflow-overview)
+- [Quick Start](#quick-start)
 - [Function Reference](#function-reference)
-  - [find_families()](#find_families)
-  - [fit_gamlss_models()](#fit_gamlss_models)
+  - [run_perseo() - High-Level Orchestration](#run_perseo---high-level-orchestration)
+  - [find_families() - Family Selection](#find_families---family-selection)
+  - [fit_gamlss_models() - Differential Expression](#fit_gamlss_models---differential-expression)
   - [Utilities](#utilities)
-- [End‑to‑End Example](#end-to-end-example)
+- [Advanced Usage](#advanced-usage)
 - [Interpretation & Tips](#interpretation--tips)
 - [Troubleshooting](#troubleshooting)
-- [Roadmap](#roadmap)
 - [License](#license)
 
 ---
@@ -91,9 +91,111 @@ mode(counts_matrix) <- "numeric"
 
 ---
 
-## Functions
+## Quick Start
 
-### `find_families()`
+**PERSEO** provides a high-level orchestration function `run_perseo()` that handles the complete workflow in a single call:
+
+```r
+library(perseo)
+
+# Prepare your data
+metadata$condition <- relevel(factor(metadata$condition), ref = "Control")
+design <- model.matrix(~ condition + age + batch, data = metadata)
+counts_matrix <- as.matrix(counts[, rownames(design)])
+mode(counts_matrix) <- "numeric"
+
+# Run complete PERSEO pipeline
+results <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = design,
+  n_genes = 200,           # Features to sample for family selection
+  n_boot = 10,             # Bootstrap iterations
+  top_n = 4,               # Top families to select
+  criterion = "BIC",       # Model selection criterion
+  min_n = 20,              # Minimum valid observations
+  p_adjust_method = "BH", # Multiple testing correction
+  verbose = TRUE,          # Show progress messages
+  seed = 123               # Reproducibility
+)
+
+# View results summary
+print(results)
+
+# Access components
+head(results$differential_expression$results)  # DE results with FDR
+head(results$differential_expression$selection) # Best family per feature
+results$family_selection$top_families_overall   # Selected families
+results$summary                                  # Execution summary
+
+# Filter significant results (FDR < 0.05)
+sig_results <- results$differential_expression$results %>%
+  filter(p_adj < 0.05, grepl("^condition", term))
+```
+
+**What `run_perseo()` does:**
+
+1. **Family Selection**: Bootstraps a subset of features to identify the most frequently selected GAMLSS families
+2. **Differential Expression**: Fits selected families to all features and picks the best model per feature
+3. **Multiple Testing Correction**: Applies global FDR adjustment across all tests
+
+**Returns** a `perseo_results` object with three components:
+- `$family_selection`: Family selection bootstrap results
+- `$differential_expression`: DE models with adjusted p-values
+- `$summary`: Execution metadata and status
+
+---
+
+## Function Reference
+
+### `run_perseo()` - High-Level Orchestration
+
+One-function workflow combining family selection, differential expression, and p-value adjustment.
+
+**Usage**
+
+```r
+results <- run_perseo(
+  counts_matrix,
+  design_matrix,
+  n_genes = 200,
+  n_boot = 10,
+  top_n = 4,
+  families = NULL,
+  group_by_support = TRUE,
+  criterion = "GAIC",
+  gaic_k = NULL,
+  min_n = 5,
+  binom_bd = NULL,
+  filter_beta_inflated = TRUE,
+  p_adjust_method = "BH",
+  verbose = TRUE,
+  seed = NULL
+)
+```
+
+**Key Arguments**
+
+- `counts_matrix`: numeric matrix (features × samples)
+- `design_matrix`: model matrix with nrow = ncol(counts_matrix)
+- `n_genes`: number of features to sample for family selection
+- `n_boot`: bootstrap iterations for family selection
+- `top_n`: number of top families to select
+- `families`: candidate families (NULL = use defaults)
+- `criterion`: "GAIC", "BIC", or "AIC"
+- `p_adjust_method`: "BH", "bonferroni", "holm", etc.
+- `verbose`: show progress messages
+- `seed`: for reproducibility
+
+**Returns**
+
+`perseo_results` S3 object with:
+- `family_selection`: output from `find_families()`
+- `differential_expression`: output from `fit_gamlss_models()` with global p-value adjustment
+- `summary`: list with execution metadata
+
+---
+
+### `find_families()` - Family Selection
 
 Identify frequent, plausible GAMLSS families via bootstrap sampling. For each sampled feature,
 it fits **intercept‑only** models across candidate families using **strict transforms**, a **common mask**,
@@ -198,12 +300,15 @@ with(ff$sampled_results[!ff$sampled_results$skipped, ], table(support, family))
 
 ---
 
-### `fit_gamlss_models()`
+### `fit_gamlss_models()` - Differential Expression
 
 Fit multiple GAMLSS families per feature on a **common set of observations**, apply
 **Jacobian correction**, select the **best family** by IC, and return **per‑term statistics**
-from `summary(fit, what="mu")`. This “no‑VCOV mode” avoids fragile covariance extraction and
+from `summary(fit, what="mu")`. This "no‑VCOV mode" avoids fragile covariance extraction and
 is robust across families.
+
+> **Note**: When using `run_perseo()`, this function is called automatically with selected families.
+> Use directly only for advanced workflows or when you already know which families to test.
 
 **Usage**
 
@@ -303,9 +408,149 @@ head(fit$results)
 
 ---
 
-## Contributions
+## Advanced Usage
 
-Open an issue or pull request with suggestions, improvements, or feedback. This is an early-stage open science tool.
+### Step-by-Step Workflow
+
+For fine-grained control, you can call the internal functions directly:
+
+```r
+# Step 1: Select families via bootstrap
+family_results <- find_families(
+  counts_matrix = counts_matrix,
+  n_genes = 300,
+  n_boot = 10,
+  top_n = 6,
+  criterion = "BIC",
+  min_n = 20,
+  seed = 123
+)
+
+selected_families <- family_results$top_families_overall
+print(selected_families)
+#> [1] "GG"    "LOGNO" "NBI"   "GA"    "TF"    "NO"
+
+# Step 2: Fit models with selected families
+de_results <- fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = design,
+  candidate_families = selected_families,
+  criterion = "BIC",
+  min_n = 20,
+  p_adjust = "BH",  # Per-term FDR within fit_gamlss_models
+  workers = 4,
+  show_progress = TRUE
+)
+
+# Step 3: Manual global p-value adjustment (optional)
+de_results$results$p_adj_global <- p.adjust(
+  de_results$results$pval,
+  method = "BH"
+)
+
+# Access results
+head(de_results$selection)  # Best family per feature
+head(de_results$results)    # Per-term statistics
+```
+
+### Parallel Processing
+
+```r
+library(future)
+
+# Configure parallel backend
+plan(multisession, workers = 8)
+
+# Enable progress bars
+options(progressr.enable = TRUE)
+if (requireNamespace("cli", quietly = TRUE)) {
+  progressr::handlers("cli")
+}
+
+# Run with parallelization
+results <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = design,
+  n_genes = 500,
+  n_boot = 20,
+  verbose = TRUE
+)
+
+# Reset to sequential
+plan(sequential)
+```
+
+### Custom Family Panel
+
+```r
+# Define custom families
+my_families <- c("PO", "NBI", "ZIP", "ZINBI",  # Count distributions
+                 "GA", "GG", "IG", "LOGNO",    # Positive continuous
+                 "NO", "TF")                    # Real-valued
+
+results <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = design,
+  families = my_families,
+  n_genes = 200,
+  top_n = 5,
+  criterion = "BIC"
+)
+```
+
+---
+
+## Interpretation & Tips
+
+### Understanding Results
+
+**Family Selection**: 
+- `top_families_overall`: Most frequently selected families across bootstrap samples
+- `freq_table_overall`: How many times each family was selected
+- Higher frequency = more robust/versatile for your dataset
+
+**Differential Expression**:
+- `results$pval`: Raw p-values from Wald tests
+- `results$padj` or `results$p_adj`: FDR-adjusted p-values (depends on workflow)
+- `results$effect`: Coefficient on link scale (not directly interpretable as fold-change)
+- `selection$best_family`: Winning family per feature after IC comparison
+
+### Recommended Settings
+
+- **Sample size < 50**: Use `criterion = "AIC"` (less penalty)
+- **Sample size 50-200**: Use `criterion = "BIC"` (balanced)
+- **Sample size > 200**: Use `criterion = "GAIC"` with `gaic_k = log(n)`
+- **Bootstrap**: `n_boot = 10-20` usually sufficient; higher for robustness
+- **Sampling**: `n_genes = 200-500` captures diversity without excessive runtime
+
+### Common Pitfalls
+
+1. **All features skipped**: Check `min_n` - you may need fewer valid observations
+2. **No families selected**: Increase `n_genes` or `n_boot`
+3. **NAs in results**: Normal for some features; check `selection$n_valid_obs`
+4. **Slow runtime**: Use parallelization with `future::plan(multisession)`
+
+---
+
+## Troubleshooting
+
+**Error: "unused argument (binom_bd = ...)"**
+- This parameter is only for `find_families()`, not `fit_gamlss_models()`
+
+**Warning: "No families selected"**
+- Data may be too sparse
+- Try increasing `n_genes` or reducing `min_n`
+- Check for extreme outliers or batch effects
+
+**Slow performance**
+- Enable parallel processing: `future::plan(multisession, workers = N)`
+- Reduce `n_genes` or `n_boot` for family selection
+- Use `verbose = FALSE` to suppress messages
+
+**Memory issues**
+- Process features in batches
+- Reduce number of workers
+- Use `criterion = "BIC"` (faster than GAIC)
 
 ---
 

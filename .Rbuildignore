@@ -1,0 +1,17 @@
+^\\.git$
+^\\.github$
+^\\.Rproj$
+^\\.Rproj.user$
+
+^assets$
+^datasets$
+^docs$
+
+^CHANGELOG\\.md$
+^README\\.md$
+^test_run\\.R$
+
+^benchmark$
+^scripts$
+
+^.*\\.log$

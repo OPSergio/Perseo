@@ -265,10 +265,19 @@ transform_for_family_strict <- function(y, fam, eps = 1e-6, allow_eps = TRUE) {
 
   # Positive continuous: identity; valid if y > 0
   if (fam %in% fam_positive) {
-    y_adj <- y
-    if (allow_eps) y_adj[y_adj <= 0] <- eps
-    mask <- finite_y & (y_adj > 0)
-    z <- y_adj
+    # Mask based on original values
+    if (allow_eps) {
+      mask <- finite_y & (y > 0 | (y == 0))  # Allow exactly 0 to be nudged to eps
+    } else {
+      mask <- finite_y & (y > 0)
+    }
+    
+    # Transform: nudge boundary values if allowed
+    z <- y
+    if (allow_eps) {
+      z[finite_y & y <= 0] <- eps
+    }
+    
     logJ <- rep(0, n)
     meta <- list(kind = "identity", params = list())
     return(list(y = z, mask = mask, logJ_per_obs = logJ, meta = meta))

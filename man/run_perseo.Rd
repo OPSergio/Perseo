@@ -18,6 +18,7 @@ run_perseo(
   binom_bd = NULL,
   filter_beta_inflated = TRUE,
   p_adjust_method = "BH",
+  transform_mode = NULL,
   verbose = TRUE,
   seed = NULL
 )
@@ -56,6 +57,11 @@ vector of length = ncol(counts_matrix) (default: NULL).}
 \item{p_adjust_method}{Character, p-value adjustment method passed to `p.adjust()`
 (default: "BH"). Options: "holm", "hochberg", "hommel", "bonferroni", "BH", "BY", "fdr", "none".}
 
+\item{transform_mode}{Character: "strict" or "safe", or NULL for automatic selection.
+If NULL (default), automatically sets to "strict" when group_by_support = TRUE,
+and "safe" when group_by_support = FALSE. Controls transformation behavior for
+both family selection and differential expression.}
+
 \item{verbose}{Logical, print progress messages (default: TRUE).}
 
 \item{seed}{Integer or NULL, random seed for reproducibility (default: NULL).}
@@ -68,7 +74,7 @@ List with three components:
   \item{differential_expression}{Output from `fit_gamlss_models()` with FDR-adjusted
     p-values: fitted models tibble with per-term statistics.}
   \item{summary}{List with execution summary: number of features tested, families selected,
-    models fitted, and adjustment method used.}
+    models fitted, adjustment method used, and transform_mode.}
 }
 }
 \description{

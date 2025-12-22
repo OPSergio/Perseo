@@ -15,4 +15,3 @@ Logical; TRUE if feature should be skipped.
 \description{
 Check if feature has insufficient variation for modeling
 }
-\keyword{internal}

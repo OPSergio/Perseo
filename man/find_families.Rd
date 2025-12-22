@@ -19,7 +19,8 @@ find_families(
   gaic_k = NULL,
   filter_beta_inflated = TRUE,
   thr_zero = 0.005,
-  thr_one = 0.005
+  thr_one = 0.005,
+  transform_mode = NULL
 )
 }
 \arguments{
@@ -56,6 +57,13 @@ Binomial denominator for BI/BB. If NULL, infer per feature as max(y) when consis
 \item{thr_zero}{numeric threshold for zero inflation evidence (default: 0.005)}
 
 \item{thr_one}{numeric threshold for one inflation evidence (default: 0.005)}
+
+\item{transform_mode}{character: "strict" or "safe". Transformation mode for family comparison.
+- "strict" (default when group_by_support = TRUE): Conservative, domain-preserving.
+  Invalid observations excluded via mask. No data repair.
+- "safe" (default when group_by_support = FALSE): Global affine transformations
+  to fit data into family domain. Invertible with Jacobian correction.
+If NULL, defaults based on group_by_support setting.}
 }
 \value{
 list(
@@ -65,7 +73,8 @@ list(
   prop_table_overall     = named numeric,
   freq_by_support        = named list of tables,
   prop_by_support        = named list of named numerics,
-  sampled_results        = tibble with per-feature decisions across pulls
+  sampled_results        = tibble with per-feature decisions across pulls,
+  transform_mode         = character indicating mode used
 )
 }
 \description{

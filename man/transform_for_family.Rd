@@ -2,7 +2,7 @@
 % Please edit documentation in R/utils_transformations.R
 \name{transform_for_family}
 \alias{transform_for_family}
-\title{Transform expression values for compatibility with a GAMLSS family (SAFE)}
+\title{Transform expression values for compatibility with a GAMLSS family (LEGACY)}
 \usage{
 transform_for_family(y, fam, strategy = "safe", eps = 1e-06)
 }
@@ -13,7 +13,7 @@ transform_for_family(y, fam, strategy = "safe", eps = 1e-06)
 
 \item{strategy}{"safe" (default) or "strict". "strict" only replaces
 invalid values with NA (for compatibility); comparative selection
-should use \code{transform_for_family_strict()}.}
+should use \code{transform_response()}.}
 
 \item{eps}{Small numeric value for smoothing/clipping.}
 }
@@ -21,9 +21,6 @@ should use \code{transform_for_family_strict()}.}
 Numeric vector transformed (same length as `y`).
 }
 \description{
-Applies family-specific preprocessing to `y` so that it meets the domain
-required by each distribution. The "safe" version may **clip** or
-**rescale** (e.g., replace out-of-domain values with valid limits).
-Use this for visualization/diagnostics. For fair model-family comparison,
-use \code{transform_for_family_strict()} with Jacobian correction.
+Legacy function for basic transformations. For model selection, use
+\code{transform_response()} with mode = "strict" or "safe".
 }

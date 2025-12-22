@@ -10,7 +10,8 @@ compare_families_on_feature(
   criterion = "GAIC",
   gaic_k = NULL,
   min_n = 5,
-  bd_vec = NULL
+  bd_vec = NULL,
+  transform_mode = "strict"
 )
 }
 \arguments{
@@ -26,6 +27,8 @@ filtered by support/inflation heuristics).}
 \item{min_n}{Integer minimum number of valid observations after common mask.}
 
 \item{bd_vec}{Optional binomial denominator vector.}
+
+\item{transform_mode}{Character: "strict" or "safe" transformation mode.}
 }
 \value{
 List with comparisons tibble containing family results.

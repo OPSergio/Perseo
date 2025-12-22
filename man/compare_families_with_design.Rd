@@ -11,7 +11,8 @@ compare_families_with_design(
   criterion = "GAIC",
   gaic_k = NULL,
   min_n = 5,
-  bd_vec = NULL
+  bd_vec = NULL,
+  transform_mode = "strict"
 )
 }
 \arguments{
@@ -28,6 +29,8 @@ compare_families_with_design(
 \item{min_n}{Integer minimum valid observations.}
 
 \item{bd_vec}{Optional binomial denominator vector.}
+
+\item{transform_mode}{Character: "strict" or "safe" transformation mode.}
 }
 \value{
 List with comparisons tibble.

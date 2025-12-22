@@ -15,7 +15,8 @@ fit_gamlss_models(
   p_adjust = "BH",
   workers = 1,
   show_progress = TRUE,
-  progress_label = "Fitting features"
+  progress_label = "Fitting features",
+  transform_mode = "strict"
 )
 }
 \arguments{
@@ -46,6 +47,11 @@ configure `future::plan()` before calling. Default `1`.}
 \item{show_progress}{logical; show a `progressr` progress bar. Default `TRUE`.}
 
 \item{progress_label}{character label shown next to the progress bar.}
+
+\item{transform_mode}{character: "strict" (default) or "safe". Transformation mode
+for family comparison. "strict" enforces domain-preserving transformations with
+observation exclusion. "safe" applies global affine transformations to fit data
+into family domain (invertible with Jacobian correction).}
 }
 \value{
 A list with:
@@ -53,19 +59,19 @@ A list with:
     \item{results}{tibble with columns: `feature`, `term`, `effect`, `se`,
       `stat`, `pval`, `padj`.}
     \item{selection}{tibble with columns: `feature`, `best_family`,
-      `n_valid_obs`, `ic_value` (Jacobian-corrected IC).}
+      `n_valid_obs`, `ic_value` (Jacobian-corrected IC), `transform_mode`.}
   }
 }
 \description{
 Compares candidate GAMLSS families per feature on the same set of observations
-(common mask), using strict, family-specific transformations and Jacobian
+(common mask), using family-specific transformations and Jacobian
 correction for fair IC comparison. Selects the best family by GAIC/BIC/AIC and
 returns per-term statistics from `summary(fit, what = "mu")`.
 }
 \details{
-Family comparison uses strict transforms, a common mask across
-families, and Jacobian correction so ICs are comparable on the original data
-scale. Coefficients/p-values are taken from `summary(., what = "mu")`.
+Family comparison uses transformations (strict or safe), a common mask
+across families, and Jacobian correction so ICs are comparable on the original
+data scale. Coefficients/p-values are taken from `summary(., what = "mu")`.
 }
 \examples{
 \dontrun{
@@ -73,10 +79,11 @@ fit <- fit_gamlss_models(
   counts_matrix, design, c("NBI","GG","LOGNO"),
   criterion = "BIC", min_n = 20,
   workers = 4,
-  show_progress = TRUE
+  show_progress = TRUE,
+  transform_mode = "strict"
 )
 }
 }
 \seealso{
-find_families, transform_for_family_strict
+find_families, transform_response
 }

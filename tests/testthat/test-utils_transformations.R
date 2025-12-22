@@ -156,3 +156,180 @@ test_that("jacobian_sum computes correctly for log transform", {
   # Log-normal uses log transform, so check that Jacobian is computed
   expect_true(is.finite(sum(tr$logJ_per_obs)))
 })
+
+
+# ===== transform_response() tests =====
+
+test_that("transform_response returns correct contract", {
+  y <- c(1, 2, 3, 4, 5)
+  
+  # Strict mode
+  res_strict <- transform_response(y, "PO", mode = "strict")
+  expect_type(res_strict, "list")
+  expect_named(res_strict, c("y", "mask", "logJ_per_obs", "meta", "mode_used"))
+  expect_equal(length(res_strict$y), length(y))
+  expect_equal(length(res_strict$mask), length(y))
+  expect_equal(length(res_strict$logJ_per_obs), length(y))
+  expect_equal(res_strict$mode_used, "strict")
+  
+  # Safe mode
+  res_safe <- transform_response(y, "PO", mode = "safe")
+  expect_type(res_safe, "list")
+  expect_named(res_safe, c("y", "mask", "logJ_per_obs", "meta", "mode_used"))
+  expect_equal(length(res_safe$y), length(y))
+  expect_equal(length(res_safe$mask), length(y))
+  expect_equal(length(res_safe$logJ_per_obs), length(y))
+  expect_equal(res_safe$mode_used, "safe")
+})
+
+test_that("transform_response: strict excludes, safe keeps observations", {
+  # Data with negative values
+  y <- c(-1, 0, 1, 2, 3)
+  
+  # Positive family (GA): strict should exclude negatives
+  res_strict <- transform_response(y, "GA", mode = "strict")
+  expect_false(res_strict$mask[1])  # -1 should be excluded
+  expect_true(res_strict$mask[3])   # 1 should be included
+  
+  # Safe mode should keep all finite observations
+  res_safe <- transform_response(y, "GA", mode = "safe")
+  expect_true(all(res_safe$mask))   # All finite values kept
+  expect_true(all(res_safe$y > 0))  # All transformed to positive
+})
+
+test_that("transform_response SAFE mode is reversible", {
+  # Positive family
+  y_pos <- c(0.5, 1.2, 3.7, 5.9, 10.3)
+  res_pos <- transform_response(y_pos, "GA", mode = "safe")
+  y_back_pos <- inverse_transform(res_pos$y, res_pos$meta)
+  expect_equal(y_back_pos, y_pos, tolerance = 1e-10)
+  
+  # Unit family
+  y_unit <- c(0.1, 0.3, 0.5, 0.7, 0.9)
+  res_unit <- transform_response(y_unit, "BE", mode = "safe")
+  y_back_unit <- inverse_transform(res_unit$y, res_unit$meta)
+  expect_equal(y_back_unit, y_unit, tolerance = 1e-10)
+  
+  # Real family
+  y_real <- c(-2, -1, 0, 1, 2)
+  res_real <- transform_response(y_real, "NO", mode = "safe")
+  y_back_real <- inverse_transform(res_real$y, res_real$meta)
+  expect_equal(y_back_real, y_real, tolerance = 1e-10)
+})
+
+test_that("transform_response SAFE affine has constant Jacobian", {
+  # Positive family: affine shift
+  y <- c(-2, -1, 0, 1, 2)
+  res <- transform_response(y, "GA", mode = "safe")
+  expect_equal(res$meta$kind, "affine")
+  # For affine y* = a*y + b, Jacobian should be constant log(a)
+  expect_true(all(res$logJ_per_obs == res$logJ_per_obs[1]))
+  expect_equal(res$logJ_per_obs[1], log(abs(res$meta$params$a)))
+  
+  # Unit family: affine scaling
+  y_unit <- c(0.1, 0.5, 0.9)
+  res_unit <- transform_response(y_unit, "BE", mode = "safe")
+  expect_equal(res_unit$meta$kind, "affine")
+  expect_true(all(res_unit$logJ_per_obs == res_unit$logJ_per_obs[1]))
+  expect_equal(res_unit$logJ_per_obs[1], log(abs(res_unit$meta$params$a)))
+})
+
+test_that("transform_response identity transform has zero Jacobian", {
+  # Count families use identity
+  y <- c(0, 1, 2, 3, 5)
+  res_strict <- transform_response(y, "PO", mode = "strict")
+  expect_true(all(res_strict$logJ_per_obs == 0))
+  
+  res_safe <- transform_response(y, "PO", mode = "safe")
+  expect_true(all(res_safe$logJ_per_obs == 0))
+})
+
+test_that("transform_response SAFE: one family per support", {
+  # Positive family: shift applied
+  y_pos <- c(-1, 0, 1, 2)
+  res_pos <- transform_response(y_pos, "GA", mode = "safe")
+  expect_equal(res_pos$meta$kind, "affine")
+  expect_true(all(res_pos$y > 0))
+  expect_true(res_pos$meta$params$b > 0)  # Shift applied
+  
+  # Unit family: min-max scaling
+  y_unit <- c(2, 4, 6, 8)
+  res_unit <- transform_response(y_unit, "BE", mode = "safe")
+  expect_equal(res_unit$meta$kind, "affine")
+  expect_true(all(res_unit$y >= 0 & res_unit$y <= 1))
+  
+  # Count family: identity, no rounding
+  y_count <- c(0.5, 1.2, 2.8)
+  res_count <- transform_response(y_count, "PO", mode = "safe")
+  expect_equal(res_count$meta$kind, "identity")
+  expect_equal(res_count$y, y_count)  # No rounding
+  
+  # Real family: z-score
+  y_real <- c(-2, -1, 0, 1, 2)
+  res_real <- transform_response(y_real, "NO", mode = "safe")
+  expect_equal(res_real$meta$kind, "zscore")
+  expect_equal(mean(res_real$y), 0, tolerance = 1e-10)
+  expect_equal(sd(res_real$y), 1, tolerance = 1e-10)
+})
+
+test_that("transform_response SAFE does not clip per observation", {
+  # This test ensures SAFE mode doesn't do observation-wise operations
+  y <- c(-5, -1, 0, 1, 5)
+  res <- transform_response(y, "GA", mode = "safe")
+  
+  # All observations should be transformed by the same affine function
+  a <- res$meta$params$a
+  b <- res$meta$params$b
+  expected <- a * y + b
+  expect_equal(res$y, expected, tolerance = 1e-10)
+  
+  # No observation-wise clipping means differences are preserved
+  diff_original <- diff(y)
+  diff_transformed <- diff(res$y)
+  # Affine transform preserves relative differences (scaled by a)
+  expect_equal(diff_transformed, a * diff_original, tolerance = 1e-10)
+})
+
+test_that("transform_response SAFE does not collapse values", {
+  # Ensure all distinct input values map to distinct output values
+  y <- c(1, 2, 3, 4, 5)
+  res <- transform_response(y, "GA", mode = "safe")
+  
+  # No value collapse: all transformed values should be unique
+  expect_equal(length(unique(res$y)), length(unique(y)))
+  
+  # Same for unit interval
+  y_unit <- seq(0, 1, by = 0.1)
+  res_unit <- transform_response(y_unit, "BE", mode = "safe")
+  expect_equal(length(unique(res_unit$y)), length(unique(y_unit)))
+})
+
+test_that("inverse_transform handles affine kind correctly", {
+  # Create an affine transform
+  y <- c(1, 2, 3, 4, 5)
+  a <- 2
+  b <- 3
+  z <- a * y + b
+  
+  meta <- list(kind = "affine", params = list(a = a, b = b))
+  y_back <- inverse_transform(z, meta)
+  
+  expect_equal(y_back, y, tolerance = 1e-10)
+})
+
+test_that("transform_response handles edge case: constant data", {
+  # All same value
+  y_const <- rep(5, 10)
+  
+  # Real family should fail (sd = 0)
+  res_real <- transform_response(y_const, "NO", mode = "safe")
+  expect_false(any(res_real$mask))
+  
+  # Unit family should fail (range = 0)
+  res_unit <- transform_response(y_const, "BE", mode = "safe")
+  expect_false(any(res_unit$mask))
+  
+  # Count/positive families should work
+  res_count <- transform_response(y_const, "PO", mode = "safe")
+  expect_true(all(res_count$mask))
+})

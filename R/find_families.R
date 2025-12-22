@@ -27,6 +27,12 @@
 #' @param filter_beta_inflated logical, filter inflated Beta families if no 0/1 evidence (default: TRUE)
 #' @param thr_zero numeric threshold for zero inflation evidence (default: 0.005)
 #' @param thr_one numeric threshold for one inflation evidence (default: 0.005)
+#' @param transform_mode character: "strict" or "safe". Transformation mode for family comparison.
+#'   - "strict" (default when group_by_support = TRUE): Conservative, domain-preserving.
+#'     Invalid observations excluded via mask. No data repair.
+#'   - "safe" (default when group_by_support = FALSE): Global affine transformations
+#'     to fit data into family domain. Invertible with Jacobian correction.
+#'   If NULL, defaults based on group_by_support setting.
 #'
 #' @return list(
 #'   top_families_overall   = character[],
@@ -35,7 +41,8 @@
 #'   prop_table_overall     = named numeric,
 #'   freq_by_support        = named list of tables,
 #'   prop_by_support        = named list of named numerics,
-#'   sampled_results        = tibble with per-feature decisions across pulls
+#'   sampled_results        = tibble with per-feature decisions across pulls,
+#'   transform_mode         = character indicating mode used
 #' )
 #' @export
 find_families <- function(counts_matrix,
@@ -52,12 +59,20 @@ find_families <- function(counts_matrix,
                           gaic_k = NULL,
                           filter_beta_inflated = TRUE,
                           thr_zero = 0.005,
-                          thr_one  = 0.005) {
+                          thr_one  = 0.005,
+                          transform_mode = NULL) {
   
   # ---- Input validation ----
   criterion <- match.arg(criterion)
   validate_counts_matrix(counts_matrix, min_features = n_genes)
   validate_criterion_args(criterion, gaic_k)
+  
+  # Set default transform_mode based on group_by_support
+  if (is.null(transform_mode)) {
+    transform_mode <- if (group_by_support) "strict" else "safe"
+  } else {
+    transform_mode <- match.arg(transform_mode, c("strict", "safe"))
+  }
   
   if (is.null(families)) {
     families <- default_candidate_families()
@@ -125,7 +140,8 @@ find_families <- function(counts_matrix,
       min_n = min_n,
       criterion = criterion,
       gaic_k = gaic_k,
-      bd_vec = filtered$bd_vec
+      bd_vec = filtered$bd_vec,
+      transform_mode = transform_mode
     )
     
     list(
@@ -145,14 +161,20 @@ find_families <- function(counts_matrix,
   results_list <- lapply(seq_len(n_boot), function(b) {
     if (isTRUE(verbose)) message("  Pull ", b, " of ", n_boot)
     pull_ids <- sample(feature_ids_all, n_genes, replace = FALSE)
-    future.apply::future_lapply(pull_ids, evaluate_feature, future.seed = TRUE)
+    future.apply::future_lapply(
+      pull_ids, 
+      evaluate_feature, 
+      future.seed = TRUE,
+      future.packages = "PERSEO"
+    )
   })
   
   # ---- Aggregate results ----
   sampled_results <- bind_bootstrap_results(results_list)
   summary_info <- summarize_family_frequencies(sampled_results, top_n, verbose)
   
-  # Append sampled results to summary
+  # Append sampled results and metadata to summary
   summary_info$sampled_results <- sampled_results
+  summary_info$transform_mode <- transform_mode
   summary_info
 }

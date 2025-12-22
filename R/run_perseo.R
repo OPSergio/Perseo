@@ -27,6 +27,10 @@
 #'   (default: TRUE).
 #' @param p_adjust_method Character, p-value adjustment method passed to `p.adjust()`
 #'   (default: "BH"). Options: "holm", "hochberg", "hommel", "bonferroni", "BH", "BY", "fdr", "none".
+#' @param transform_mode Character: "strict" or "safe", or NULL for automatic selection.
+#'   If NULL (default), automatically sets to "strict" when group_by_support = TRUE,
+#'   and "safe" when group_by_support = FALSE. Controls transformation behavior for
+#'   both family selection and differential expression.
 #' @param verbose Logical, print progress messages (default: TRUE).
 #' @param seed Integer or NULL, random seed for reproducibility (default: NULL).
 #'
@@ -37,7 +41,7 @@
 #'   \item{differential_expression}{Output from `fit_gamlss_models()` with FDR-adjusted
 #'     p-values: fitted models tibble with per-term statistics.}
 #'   \item{summary}{List with execution summary: number of features tested, families selected,
-#'     models fitted, and adjustment method used.}
+#'     models fitted, adjustment method used, and transform_mode.}
 #' }
 #'
 #' @details
@@ -107,6 +111,7 @@ run_perseo <- function(counts_matrix,
                        binom_bd = NULL,
                        filter_beta_inflated = TRUE,
                        p_adjust_method = "BH",
+                       transform_mode = NULL,
                        verbose = TRUE,
                        seed = NULL) {
   
@@ -140,7 +145,8 @@ run_perseo <- function(counts_matrix,
     binom_bd = binom_bd,
     criterion = criterion,
     gaic_k = gaic_k,
-    filter_beta_inflated = filter_beta_inflated
+    filter_beta_inflated = filter_beta_inflated,
+    transform_mode = transform_mode
   )
   
   # Extract selected families
@@ -182,7 +188,8 @@ run_perseo <- function(counts_matrix,
     candidate_families = selected_families,
     criterion = criterion,
     gaic_k = gaic_k,
-    min_n = min_n
+    min_n = min_n,
+    transform_mode = family_results$transform_mode
   )
   
   # ---- Step 3: Multiple Testing Correction ----
@@ -233,6 +240,7 @@ run_perseo <- function(counts_matrix,
     families_selected = selected_families,
     n_families_selected = length(selected_families),
     criterion = criterion,
+    transform_mode = family_results$transform_mode,
     models_fitted = n_models_fitted,
     p_adjust_method = p_adjust_method,
     status = "completed"

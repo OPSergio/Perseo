@@ -1,16 +1,169 @@
-#' Transform expression values for compatibility with a GAMLSS family (SAFE)
+#' Unified transformation dispatcher for GAMLSS families
 #'
-#' Applies family-specific preprocessing to `y` so that it meets the domain
-#' required by each distribution. The "safe" version may **clip** or
-#' **rescale** (e.g., replace out-of-domain values with valid limits).
-#' Use this for visualization/diagnostics. For fair model-family comparison,
-#' use \code{transform_for_family_strict()} with Jacobian correction.
+#' Applies either strict or safe transformations to ensure compatibility with
+#' the theoretical domain of a GAMLSS family. Returns the transformed response,
+#' a validity mask, per-observation Jacobian, and metadata for inversion.
+#'
+#' **Transformation modes:**
+#'
+#' - **strict**: Enforces theoretical domain only; invalid observations excluded via mask.
+#'   No data repair. Uses Jacobian correction. Conservative, support-consistent.
+#'   Recommended when `group_by_support = TRUE`.
+#'
+#' - **safe**: Applies global, deterministic, reversible affine transformations
+#'   (y* = a·y + b, a > 0) to fit data into family domain. No observation-wise
+#'   clipping or rounding. All transformations are invertible with Jacobian correction.
+#'   Intended for exploratory modeling when users accept comparison on transformed scale.
+#'
+#' @param y Numeric vector of response values.
+#' @param fam Character: GAMLSS family name.
+#' @param mode Character: Transformation mode, either "strict" (default) or "safe".
+#' @param eps Small numeric value for epsilon handling in domains that exclude 0/1.
+#' @param allow_eps Logical; if TRUE, nudges boundary values slightly inside domain (strict mode only).
+#'
+#' @return A list with:
+#'   \describe{
+#'     \item{y}{Transformed response (numeric vector).}
+#'     \item{mask}{Logical vector indicating valid observations.}
+#'     \item{logJ_per_obs}{Numeric vector of log-Jacobian values per observation.}
+#'     \item{meta}{Metadata for inversion (list with kind and params).}
+#'     \item{mode_used}{Character indicating transformation mode applied.}
+#'   }
+#'
+#' @details
+#' **SAFE mode family-specific behavior:**
+#'
+#' - **Positive continuous** (GA, GG, LOGNO, IG): If min(y) <= 0, apply global shift
+#'   b = -min(y) + eps, a = 1. Result: (eps, +∞).
+#'
+#' - **Unit interval** (BE, BEINF, BEO, BEZI, BEo, BEINF0): Global min-max scaling
+#'   a = 1/(max(y) - min(y)), b = -min(y) * a. Optionally shift for epsilon.
+#'
+#' - **Real-valued** (NO, TF, GU): Z-score standardization (same as strict).
+#'
+#' - **Count** (PO, NBI, ZIP, ZINBI, ZIP2): Identity, no rounding (let likelihood decide).
+#'
+#' @seealso transform_for_family_strict, inverse_transform
+#' @export
+transform_response <- function(y, fam, mode = c("strict", "safe"), eps = 1e-6, allow_eps = TRUE) {
+  mode <- match.arg(mode)
+  
+  if (mode == "strict") {
+    result <- transform_for_family_strict(y, fam, eps = eps, allow_eps = allow_eps)
+    result$mode_used <- "strict"
+    return(result)
+  }
+  
+  # SAFE mode implementation
+  n <- length(y)
+  finite_y <- is.finite(y)
+  
+  fam_count    <- c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB")
+  fam_unit     <- c("BE","BEINF","BEO","BEZI","BEo","BEINF0")
+  fam_positive <- c("GA","GG","LOGNO","IG")
+  fam_real     <- c("NO","TF","GU")
+  
+  # Positive continuous: global shift if min(y) <= 0
+  if (fam %in% fam_positive) {
+    yy <- y[finite_y]
+    min_y <- min(yy, na.rm = TRUE)
+    b <- if (min_y <= 0) -min_y + eps else 0
+    a <- 1
+    z <- a * y + b
+    mask <- finite_y
+    logJ <- rep(log(abs(a)), n)
+    meta <- list(kind = "affine", params = list(a = a, b = b))
+    return(list(y = z, mask = mask, logJ_per_obs = logJ, meta = meta, mode_used = "safe"))
+  }
+  
+  # Unit interval: global min-max scaling
+  if (fam %in% fam_unit) {
+    yy <- y[finite_y]
+    min_y <- min(yy, na.rm = TRUE)
+    max_y <- max(yy, na.rm = TRUE)
+    
+    if (!is.finite(min_y) || !is.finite(max_y) || max_y <= min_y) {
+      return(list(
+        y = rep(NA_real_, n),
+        mask = rep(FALSE, n),
+        logJ_per_obs = rep(-Inf, n),
+        meta = list(kind = "affine", params = list(a = NA_real_, b = NA_real_)),
+        mode_used = "safe"
+      ))
+    }
+    
+    # Check if family allows 0 or 1
+    allow_zero <- fam %in% c("BEINF", "BEZI", "BEINF0")
+    allow_one  <- fam %in% c("BEINF", "BEo", "BEINF0")
+    
+    # Single global affine transform: z = a*y + b
+    # If epsilon padding needed, adjust the scaling factor and offset
+    if (!allow_zero || !allow_one) {
+      # Add epsilon padding on both ends: z maps [min_y, max_y] to [eps, 1-eps]
+      a <- (1 - 2 * eps) / (max_y - min_y)
+      b <- eps - min_y * a
+    } else {
+      # No epsilon needed: z maps [min_y, max_y] to [0, 1]
+      a <- 1 / (max_y - min_y)
+      b <- -min_y * a
+    }
+    
+    z <- a * y + b
+    mask <- finite_y
+    logJ <- rep(log(abs(a)), n)
+    meta <- list(kind = "affine", params = list(a = a, b = b))
+    return(list(y = z, mask = mask, logJ_per_obs = logJ, meta = meta, mode_used = "safe"))
+  }
+  
+  # Real-valued: z-score (same as strict)
+  if (fam %in% fam_real) {
+    yy <- y[finite_y]
+    s <- sd(yy, na.rm = TRUE)
+    m <- mean(yy, na.rm = TRUE)
+    
+    if (!is.finite(s) || s <= 0) {
+      return(list(
+        y = rep(NA_real_, n),
+        mask = rep(FALSE, n),
+        logJ_per_obs = rep(-Inf, n),
+        meta = list(kind = "zscore", params = list(center = NA_real_, scale = NA_real_)),
+        mode_used = "safe"
+      ))
+    }
+    
+    z <- (y - m) / s
+    mask <- is.finite(z)
+    logJ <- rep(-log(s), n)
+    meta <- list(kind = "zscore", params = list(center = m, scale = s))
+    return(list(y = as.numeric(z), mask = mask, logJ_per_obs = logJ, meta = meta, mode_used = "safe"))
+  }
+  
+  # Count families: identity, no rounding
+  if (fam %in% fam_count) {
+    z <- y
+    mask <- finite_y
+    logJ <- rep(0, n)
+    meta <- list(kind = "identity", params = list())
+    return(list(y = z, mask = mask, logJ_per_obs = logJ, meta = meta, mode_used = "safe"))
+  }
+  
+  # Default: identity
+  mask <- finite_y
+  meta <- list(kind = "identity", params = list())
+  list(y = y, mask = mask, logJ_per_obs = rep(0, n), meta = meta, mode_used = "safe")
+}
+
+
+#' Transform expression values for compatibility with a GAMLSS family (LEGACY)
+#'
+#' Legacy function for basic transformations. For model selection, use
+#' \code{transform_response()} with mode = "strict" or "safe".
 #'
 #' @param y Numeric vector of expression values.
 #' @param fam Character: GAMLSS family name.
 #' @param strategy "safe" (default) or "strict". "strict" only replaces
 #'        invalid values with NA (for compatibility); comparative selection
-#'        should use \code{transform_for_family_strict()}.
+#'        should use \code{transform_response()}.
 #' @param eps Small numeric value for smoothing/clipping.
 #'
 #' @return Numeric vector transformed (same length as `y`).
@@ -202,6 +355,10 @@ inverse_transform <- function(z, meta) {
     a <- meta$params$min
     b <- meta$params$max
     return(a + z * (b - a))
+  } else if (kind == "affine") {
+    a <- meta$params$a
+    b <- meta$params$b
+    return((z - b) / a)
   } else {
     # identity or unknown kind
     return(z)

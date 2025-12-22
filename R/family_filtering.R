@@ -156,7 +156,7 @@ infer_binomial_denominator <- function(y,
 #' @param y Numeric vector with feature values.
 #'
 #' @return Logical; TRUE if feature should be skipped.
-#' @keywords internal
+#' @export
 has_insufficient_variation <- function(y) {
   y_finite <- y[is.finite(y)]
   n_unique <- length(unique(y_finite))

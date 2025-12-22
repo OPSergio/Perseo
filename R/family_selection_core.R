@@ -11,6 +11,7 @@
 #' @param criterion Character IC criterion ("AIC", "BIC", "GAIC").
 #' @param gaic_k Optional numeric GAIC penalty override.
 #' @param bd_vec Optional binomial denominator vector.
+#' @param transform_mode Character: "strict" or "safe" transformation mode.
 #'
 #' @return List with comparisons tibble containing family results.
 #'
@@ -20,13 +21,14 @@ compare_families_on_feature <- function(feature_vec,
                                         criterion = "GAIC",
                                         gaic_k = NULL,
                                         min_n = 5,
-                                        bd_vec = NULL) {
+                                        bd_vec = NULL,
+                                        transform_mode = "strict") {
   y <- feature_vec
   candidate_families <- families
   
   # Transform with all candidate families
   transforms <- stats::setNames(
-    lapply(candidate_families, function(fam) transform_for_family_strict(y, fam)),
+    lapply(candidate_families, function(fam) transform_response(y, fam, mode = transform_mode)),
     candidate_families
   )
 
@@ -183,6 +185,7 @@ compare_families_on_feature <- function(feature_vec,
 #' @param gaic_k Optional GAIC penalty.
 #' @param min_n Integer minimum valid observations.
 #' @param bd_vec Optional binomial denominator vector.
+#' @param transform_mode Character: "strict" or "safe" transformation mode.
 #'
 #' @return List with comparisons tibble.
 #'
@@ -193,7 +196,8 @@ compare_families_with_design <- function(feature_vec,
                                          criterion = "GAIC",
                                          gaic_k = NULL,
                                          min_n = 5,
-                                         bd_vec = NULL) {
+                                         bd_vec = NULL,
+                                         transform_mode = "strict") {
   y <- feature_vec
   candidate_families <- families
   design_matrix <- design_df
@@ -201,7 +205,7 @@ compare_families_with_design <- function(feature_vec,
   
   # Transform with all candidate families
   transforms <- stats::setNames(
-    lapply(candidate_families, function(fam) transform_for_family_strict(y, fam)),
+    lapply(candidate_families, function(fam) transform_response(y, fam, mode = transform_mode)),
     candidate_families
   )
 

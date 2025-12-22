@@ -1,7 +1,7 @@
 #' Fit GAMLSS models per feature (family selection with common mask + Jacobian)
 #'
 #' Compares candidate GAMLSS families per feature on the same set of observations
-#' (common mask), using strict, family-specific transformations and Jacobian
+#' (common mask), using family-specific transformations and Jacobian
 #' correction for fair IC comparison. Selects the best family by GAIC/BIC/AIC and
 #' returns per-term statistics from `summary(fit, what = "mu")`.
 #'
@@ -22,18 +22,22 @@
 #'   configure `future::plan()` before calling. Default `1`.
 #' @param show_progress logical; show a `progressr` progress bar. Default `TRUE`.
 #' @param progress_label character label shown next to the progress bar.
+#' @param transform_mode character: "strict" (default) or "safe". Transformation mode
+#'   for family comparison. "strict" enforces domain-preserving transformations with
+#'   observation exclusion. "safe" applies global affine transformations to fit data
+#'   into family domain (invertible with Jacobian correction).
 #'
 #' @return A list with:
 #'   \describe{
 #'     \item{results}{tibble with columns: `feature`, `term`, `effect`, `se`,
 #'       `stat`, `pval`, `padj`.}
 #'     \item{selection}{tibble with columns: `feature`, `best_family`,
-#'       `n_valid_obs`, `ic_value` (Jacobian-corrected IC).}
+#'       `n_valid_obs`, `ic_value` (Jacobian-corrected IC), `transform_mode`.}
 #'   }
 #'
-#' @details Family comparison uses strict transforms, a common mask across
-#' families, and Jacobian correction so ICs are comparable on the original data
-#' scale. Coefficients/p-values are taken from `summary(., what = "mu")`.
+#' @details Family comparison uses transformations (strict or safe), a common mask
+#' across families, and Jacobian correction so ICs are comparable on the original
+#' data scale. Coefficients/p-values are taken from `summary(., what = "mu")`.
 #'
 #' @examples
 #' \dontrun{
@@ -41,10 +45,11 @@
 #'   counts_matrix, design, c("NBI","GG","LOGNO"),
 #'   criterion = "BIC", min_n = 20,
 #'   workers = 4,
-#'   show_progress = TRUE
+#'   show_progress = TRUE,
+#'   transform_mode = "strict"
 #' )
 #' }
-#' @seealso find_families, transform_for_family_strict
+#' @seealso find_families, transform_response
 #' @export
 fit_gamlss_models <- function(counts_matrix,
                               design_matrix,
@@ -56,9 +61,12 @@ fit_gamlss_models <- function(counts_matrix,
                               p_adjust = "BH",
                               workers = 1,
                               show_progress = TRUE,
-                              progress_label = "Fitting features") {
+                              progress_label = "Fitting features",
+                              transform_mode = "strict") {
   # ---- Input validation ----
   criterion <- match.arg(criterion)
+  transform_mode <- match.arg(transform_mode, c("strict", "safe"))
+  
   if (!is.null(contrast_matrix)) {
     warning("contrast_matrix is ignored; returning per-coefficient tests only.")
   }
@@ -97,7 +105,8 @@ fit_gamlss_models <- function(counts_matrix,
       criterion = criterion,
       gaic_k = gaic_k,
       min_n = min_n,
-      bd_vec = bd_vec
+      bd_vec = bd_vec,
+      transform_mode = transform_mode
     )
     
     if (nrow(family_results$comparisons) == 0) {
@@ -136,7 +145,8 @@ fit_gamlss_models <- function(counts_matrix,
         prog         = p
       )
     },
-    future.seed = TRUE
+    future.seed = TRUE,
+    future.packages = "PERSEO"
   )
   
   valid_list <- Filter(Negate(is.null), out_list)
@@ -168,7 +178,8 @@ fit_gamlss_models <- function(counts_matrix,
     feature      = vapply(valid_list, `[[`, "feature", FUN.VALUE = character(1)),
     best_family  = vapply(valid_list, `[[`, "best_fam", FUN.VALUE = character(1)),
     n_valid_obs  = vapply(valid_list, `[[`, "n_valid", FUN.VALUE = integer(1)),
-    ic_value     = vapply(valid_list, `[[`, "ic_value", FUN.VALUE = numeric(1))
+    ic_value     = vapply(valid_list, `[[`, "ic_value", FUN.VALUE = numeric(1)),
+    transform_mode = transform_mode
   )
   
   list(results = results_df, selection = selection_df)

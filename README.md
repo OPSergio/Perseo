@@ -36,6 +36,7 @@ Automated model selection and differential expression analysis for omics data us
   - [fit_gamlss_models() - Differential Expression](#fit_gamlss_models---differential-expression)
   - [Utilities](#utilities)
 - [Advanced Usage](#advanced-usage)
+  - [Transformation Modes: Strict vs Safe](#transformation-modes-strict-vs-safe)
 - [Interpretation & Tips](#interpretation--tips)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -409,6 +410,133 @@ head(fit$results)
 ---
 
 ## Advanced Usage
+
+### Transformation Modes: Strict vs Safe
+
+PERSEO supports two transformation modes for adapting data to GAMLSS family requirements:
+
+#### **Strict Mode** (Default with `group_by_support = TRUE`)
+
+**Behavior:**
+- Enforces theoretical domain requirements without modifying data
+- Invalid observations (e.g., zeros for positive families, non-integers for count families) are **excluded via mask**
+- No data repair or clipping
+- Conservative, domain-preserving approach
+
+**When to use:**
+- You want support-consistent, conservative analysis
+- Domain violations should exclude observations rather than transform them
+- Default for most analyses when `group_by_support = TRUE`
+
+**Example:**
+```r
+ff <- find_families(
+  counts_matrix = counts_matrix,
+  group_by_support = TRUE,
+  transform_mode = "strict",  # Can be omitted (default)
+  n_genes = 200,
+  criterion = "BIC"
+)
+```
+
+#### **Safe Mode** (Default with `group_by_support = FALSE`)
+
+**Behavior:**
+- Applies **global, deterministic, reversible affine transformations**: y* = a·y + b (a > 0)
+- No observation-wise clipping or rounding
+- All transformations are invertible with Jacobian correction
+- Allows flexible family exploration across support boundaries
+
+**Family-specific transformations:**
+- **Positive families** (GA, GG, LOGNO, IG): Global shift if min(y) ≤ 0
+  ```
+  b = -min(y) + eps
+  a = 1
+  ```
+- **Unit interval families** (BE, BEINF, BEO, etc.): Global min-max scaling
+  ```
+  a = 1 / (max(y) - min(y))
+  b = -min(y) * a
+  ```
+- **Real-valued families** (NO, TF, GU): Z-score standardization (same as strict)
+- **Count families** (PO, NBI, ZIP, etc.): Identity (no rounding by default)
+
+**When to use:**
+- Exploratory modeling where you're willing to compare models on transformed scale
+- `group_by_support = FALSE` (testing families across support boundaries)
+- You want to avoid excluding observations due to domain violations
+
+**Example:**
+```r
+ff <- find_families(
+  counts_matrix = counts_matrix,
+  group_by_support = FALSE,
+  transform_mode = "safe",  # Can be omitted (default with group_by_support = FALSE)
+  n_genes = 200,
+  criterion = "BIC"
+)
+```
+
+#### **Comparing Modes on Same Data**
+
+```r
+library(perseo)
+
+# Same data, strict mode
+strict_result <- find_families(
+  counts_matrix = counts_matrix,
+  group_by_support = TRUE,
+  transform_mode = "strict",
+  n_genes = 100,
+  n_boot = 5,
+  criterion = "BIC",
+  seed = 123
+)
+
+# Same data, safe mode
+safe_result <- find_families(
+  counts_matrix = counts_matrix,
+  group_by_support = FALSE,
+  transform_mode = "safe",
+  n_genes = 100,
+  n_boot = 5,
+  criterion = "BIC",
+  seed = 123
+)
+
+# Compare selected families
+strict_result$top_families_overall
+#> [1] "NBI"   "PO"    "ZINBI" "ZIP"
+
+safe_result$top_families_overall
+#> [1] "GG"    "LOGNO" "GA"    "TF"
+
+# Check which mode was used
+strict_result$transform_mode  #> "strict"
+safe_result$transform_mode    #> "safe"
+```
+
+#### **Key Differences**
+
+| Aspect | Strict | Safe |
+|--------|--------|------|
+| **Data modification** | None | Global affine transformation |
+| **Invalid observations** | Excluded (via mask) | Included (after transformation) |
+| **Jacobian correction** | Yes | Yes |
+| **Invertibility** | N/A | Yes (via metadata) |
+| **Use case** | Conservative, support-aware | Exploratory, flexible |
+| **Observation-wise ops** | No | No (only global) |
+| **Default when** | `group_by_support = TRUE` | `group_by_support = FALSE` |
+
+#### **Important Notes**
+
+- Both modes use **Jacobian correction** to ensure ICs are comparable
+- Safe mode **never** applies observation-wise clipping or silent rounding
+- All safe transformations are **global, affine, and invertible**
+- You can explicitly set `transform_mode` regardless of `group_by_support`
+- Transformation metadata is included in output for transparency
+
+---
 
 ### Step-by-Step Workflow
 

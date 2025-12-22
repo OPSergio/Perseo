@@ -39,7 +39,7 @@ Suggests:
     covr,
     knitr,
     rmarkdown
-RoxygenNote: 7.3.1
+RoxygenNote: 7.3.3
 VignetteBuilder: knitr
 URL: https://github.com/OPSergio/Perseo
 BugReports: https://github.com/OPSergio/Perseo/issues

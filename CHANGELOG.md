@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Optional bootstrap mode**: `find_families()` and `run_perseo()` now accept `bootstrap` parameter
+  - `bootstrap = TRUE` (default): Fast bootstrap sampling of features
+  - `bootstrap = FALSE`: Full evaluation of all families on ALL features (comprehensive but slower)
+  - Allows users to choose between speed and exhaustive family selection
+- **Custom contrast matrices**: `fit_gamlss_models()` now accepts `contrast_matrix` parameter
+  - Contrast specification for arbitrary linear combinations of coefficients
+  - Enables extraction of contrasts between non-reference levels (e.g., B-C when A is reference)
+  - Returns contrasts tibble with estimates, standard errors, z-statistics, and p-values
+  - Full FDR correction across features for contrast p-values
+  - New helper function `apply_contrasts()` for robust contrast computation
 - **High-level orchestration function**: `run_perseo()`
   - Complete end-to-end pipeline: family selection → differential expression → p-value adjustment
   - Verbosity control for progress messages
@@ -46,6 +56,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Variance-covariance extraction**: Implemented 3-tier fallback strategy for robust vcov computation
+  - Primary: Direct `vcov(fit, what = "mu")` call
+  - Fallback 1: Diagonal vcov from `summary()` standard errors (conservative approximation)
+  - Fallback 2: Extract `fit$vcov.mu` directly from model object
+  - Addresses gamlss internal bug where `vcov()` searches for `family_obj` in parent frame
+  - Fixed dimension mismatch for multi-parameter families (extract only mu coefficients, not sigma)
+- **Output suppression**: Fixed console flooding during tests
+  - Corrected `extract_mu_coefficients()` to use `capture.output(..., file = character())`
+  - Added explicit sink cleanup in `fit_gamlss_safely()` to prevent dangling connections
+  - All GAMLSS fitting now properly suppressed during test execution
 - **Critical bug**: Fixed NA handling in common mask computation that caused "missing value where TRUE/FALSE needed" errors
 - **Bootstrap aggregation**: Fixed vapply length errors when processing NULL or malformed results
 - **Test suite corrections**: 

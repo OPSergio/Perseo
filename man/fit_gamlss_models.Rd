@@ -36,7 +36,10 @@ uses `log(n_valid_obs)`.}
 \item{min_n}{integer minimum number of valid observations after applying the
 common mask; features below this threshold are skipped. Default `5`.}
 
-\item{contrast_matrix}{ignored; included for future API compatibility.}
+\item{contrast_matrix}{optional numeric matrix where each row defines a linear
+combination of mu coefficients. Column names must match coefficient names
+from the design matrix. If provided, contrasts are computed from vcov after
+model fitting. Use limma-style contrast matrices.}
 
 \item{p_adjust}{method passed to `p.adjust()` to compute FDR per term across
 features (default `"BH"`).}
@@ -56,10 +59,13 @@ into family domain (invertible with Jacobian correction).}
 \value{
 A list with:
   \describe{
-    \item{results}{tibble with columns: `feature`, `term`, `effect`, `se`,
-      `stat`, `pval`, `padj`.}
-    \item{selection}{tibble with columns: `feature`, `best_family`,
-      `n_valid_obs`, `ic_value` (Jacobian-corrected IC), `transform_mode`.}
+    \item{results}{tibble with columns: feature, term, effect, se,
+      stat, pval, padj.}
+    \item{selection}{tibble with columns: feature, best_family,
+      n_valid_obs, ic_value (Jacobian-corrected IC), transform_mode.}
+    \item{contrasts}{tibble with columns: feature, family, contrast,
+      estimate, se, z, p_value, p_adj. Only present if
+      contrast_matrix is not NULL.}
   }
 }
 \description{
@@ -72,9 +78,14 @@ returns per-term statistics from `summary(fit, what = "mu")`.
 Family comparison uses transformations (strict or safe), a common mask
 across families, and Jacobian correction so ICs are comparable on the original
 data scale. Coefficients/p-values are taken from `summary(., what = "mu")`.
+
+When `contrast_matrix` is provided, contrasts are computed using the variance-
+covariance matrix from the best-fitting model. If vcov extraction fails, contrasts
+will be NA for that feature.
 }
 \examples{
 \dontrun{
+# Basic usage
 fit <- fit_gamlss_models(
   counts_matrix, design, c("NBI","GG","LOGNO"),
   criterion = "BIC", min_n = 20,
@@ -82,6 +93,18 @@ fit <- fit_gamlss_models(
   show_progress = TRUE,
   transform_mode = "strict"
 )
+
+# With custom contrast matrix (limma-style)
+# For 3-level factor with columns: (Intercept), StatusB, StatusC
+C <- matrix(c(0, 1, -1), nrow = 1)  # B vs C
+colnames(C) <- c("(Intercept)", "StatusB", "StatusC")
+rownames(C) <- "B_vs_C"
+
+fit <- fit_gamlss_models(
+  counts_matrix, design, c("NBI","GG"),
+  contrast_matrix = C
+)
+head(fit$contrasts)
 }
 }
 \seealso{

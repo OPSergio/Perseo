@@ -9,8 +9,13 @@
 #' families (overall and by empirical support) with frequencies and proportions.
 #'
 #' @param counts_matrix numeric matrix (features x samples) with rownames as feature IDs
-#' @param n_genes integer, number of features per bootstrap pull (default: 200)
-#' @param n_boot integer, number of bootstrap pulls (default: 10)
+#' @param bootstrap logical, whether to use bootstrap sampling (default: TRUE).
+#'   If TRUE, randomly samples n_genes features in n_boot pulls.
+#'   If FALSE, evaluates all families on ALL features (full evaluation, no sampling).
+#' @param n_genes integer, number of features per bootstrap pull (default: 200).
+#'   Ignored if bootstrap = FALSE.
+#' @param n_boot integer, number of bootstrap pulls (default: 10).
+#'   Ignored if bootstrap = FALSE.
 #' @param top_n integer, number of top families to return (default: 4)
 #' @param families character vector of families to consider; if NULL, a default set is used
 #' @param verbose logical, print progress (default: TRUE)
@@ -46,6 +51,7 @@
 #' )
 #' @export
 find_families <- function(counts_matrix,
+                          bootstrap = TRUE,
                           n_genes = 200,
                           n_boot  = 10,
                           top_n   = 4,
@@ -64,7 +70,11 @@ find_families <- function(counts_matrix,
   
   # ---- Input validation ----
   criterion <- match.arg(criterion)
-  validate_counts_matrix(counts_matrix, min_features = n_genes)
+  if (bootstrap) {
+    validate_counts_matrix(counts_matrix, min_features = n_genes)
+  } else {
+    validate_counts_matrix(counts_matrix, min_features = 1)
+  }
   validate_criterion_args(criterion, gaic_k)
   
   # Set default transform_mode based on group_by_support
@@ -153,21 +163,38 @@ find_families <- function(counts_matrix,
     )
   }
   
-  # ---- Bootstrap execution ----
-  if (isTRUE(verbose)) {
-    message("Running find_families with ", n_boot, " bootstrap pulls of ", n_genes, " features each...")
-  }
-  
-  results_list <- lapply(seq_len(n_boot), function(b) {
-    if (isTRUE(verbose)) message("  Pull ", b, " of ", n_boot)
-    pull_ids <- sample(feature_ids_all, n_genes, replace = FALSE)
-    future.apply::future_lapply(
-      pull_ids, 
-      evaluate_feature, 
-      future.seed = TRUE,
-      future.packages = "PERSEO"
+  # ---- Evaluation execution ----
+  if (bootstrap) {
+    # Bootstrap sampling mode
+    if (isTRUE(verbose)) {
+      message("Running find_families with ", n_boot, " bootstrap pulls of ", n_genes, " features each...")
+    }
+    
+    results_list <- lapply(seq_len(n_boot), function(b) {
+      if (isTRUE(verbose)) message("  Pull ", b, " of ", n_boot)
+      pull_ids <- sample(feature_ids_all, n_genes, replace = FALSE)
+      future.apply::future_lapply(
+        pull_ids, 
+        evaluate_feature, 
+        future.seed = TRUE,
+        future.packages = "PERSEO"
+      )
+    })
+  } else {
+    # Full evaluation mode (all features, no bootstrap)
+    if (isTRUE(verbose)) {
+      message("Running find_families on ALL ", length(feature_ids_all), " features (no bootstrap)...")
+    }
+    
+    results_list <- list(
+      future.apply::future_lapply(
+        feature_ids_all,
+        evaluate_feature,
+        future.seed = TRUE,
+        future.packages = "PERSEO"
+      )
     )
-  })
+  }
   
   # ---- Aggregate results ----
   sampled_results <- bind_bootstrap_results(results_list)

@@ -58,11 +58,12 @@ PERSEO tackles this by:
 
 ---
 
-## Installation (coming soon)
+## Installation
 
 ```r
-# Not published yet
-# remotes::install_github("OPSergio/Perseo")
+# Install from GitHub
+
+remotes::install_github("OPSergio/Perseo")
 ```
 
 ---

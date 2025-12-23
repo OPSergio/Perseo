@@ -1,0 +1,45 @@
+Package: PERSEO
+Type: Package
+Title: Model-Aware Differential Expression for Omics Data
+Version: 0.0.1
+Authors@R: c(
+    person("Sergio", "Olmos-Piñero", 
+           email = "solmos97@gmail.com", 
+           role = c("aut", "cre")),
+    person("Val", "Fenández-Lanza",
+            email = "valVF@gmail.com",
+            role = "aut")
+    )
+Description: Automated model selection and differential expression analysis for 
+    high-dimensional omics data using GAMLSS (Generalized Additive Models for 
+    Location, Scale and Shape). Supports overdispersed, skewed, or otherwise 
+    non-standard distributions by testing multiple GAMLSS families per feature 
+    with strict transformations, common masking, and Jacobian correction for 
+    fair model comparison. Enables accurate inference across heterogeneous 
+    feature types (counts, proportions, positive continuous, real-valued).
+License: GPL-3
+Encoding: UTF-8
+LazyData: true
+Depends: 
+    R (>= 4.2.0)
+Imports:
+    gamlss (>= 5.4.0),
+    gamlss.dist (>= 6.0.0),
+    dplyr (>= 1.0.0),
+    tibble (>= 3.0.0),
+    rlang (>= 1.0.0),
+    stats,
+    utils,
+    progressr
+Suggests:
+    testthat (>= 3.0.0),
+    future (>= 1.32.0),
+    future.apply (>= 1.11.0),
+    devtools,
+    covr,
+    knitr,
+    rmarkdown
+RoxygenNote: 7.3.3
+VignetteBuilder: knitr
+URL: https://github.com/OPSergio/Perseo
+BugReports: https://github.com/OPSergio/Perseo/issues

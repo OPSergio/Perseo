@@ -1,0 +1,35 @@
+# ---- R / RStudio ----
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# ---- OS / Editor ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ---- Build / Check ----
+*.tar.gz
+*.Rcheck/
+*.log
+
+# ---- Temporary files ----
+tmp/
+temp/
+.cache/
+
+# ---- Benchmarks / Outputs ----
+benchmark/output/
+benchmark/results/
+plots/
+figures/
+
+# ---- Python / misc (por si acaso) ----
+__pycache__/
+*.pyc
+
+# ---- R / RStudio tmp helpers ----
+test_run.R

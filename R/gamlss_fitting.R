@@ -69,19 +69,57 @@ instantiate_gamlss_family <- function(family_name, bd_vec = NULL) {
 #' @keywords internal
 fit_gamlss_safely <- function(formula, data, family_obj) {
   tryCatch({
-    fit_result <- NULL
-    suppressWarnings({
-      utils::capture.output({
-        fit_result <- gamlss::gamlss(
-          formula = formula,
-          data = data,
-          family = family_obj,
-          trace = FALSE
-        )
-      }, file = NULL)
-    })
+    # Store family_obj BEFORE calling gamlss so it's in scope
+    family_obj_stored <- family_obj
+    
+    # Save current options and set to suppress printing
+    old_options <- options(
+      show.error.messages = FALSE,
+      warn = -1
+    )
+    on.exit(options(old_options), add = TRUE)
+    
+    # Close any existing sinks before opening new ones
+    while (sink.number(type = "output") > 0) sink(type = "output")
+    while (sink.number(type = "message") > 0) sink(type = "message")
+    
+    # Create temp file and redirect output
+    tmp <- tempfile()
+    on.exit(unlink(tmp), add = TRUE)
+    
+    # Open connection to temp file
+    con <- file(tmp, open = "wt")
+    
+    # Redirect both output and messages
+    sink(con, type = "output")
+    sink(con, type = "message")
+    on.exit({
+      sink(type = "message")
+      sink(type = "output") 
+      close(con)
+    }, add = TRUE)
+    
+    fit_result <- gamlss::gamlss(
+      formula = formula,
+      data = data,
+      family = family_obj,
+      trace = FALSE,
+      control = gamlss::gamlss.control(trace = FALSE, c.crit = 0.001),
+      i.control = gamlss::glim.control(trace = FALSE)
+    )
+    
+    # Store family_obj in fit for vcov() to find it
+    if (!is.null(fit_result)) {
+      fit_result$family_obj_stored <- family_obj_stored
+    }
+    
     fit_result
-  }, error = function(e) NULL)
+  }, error = function(e) {
+    # Make sure to close sinks on error
+    try(sink(type = "message"), silent = TRUE)
+    try(sink(type = "output"), silent = TRUE)
+    NULL
+  })
 }
 
 
@@ -141,7 +179,7 @@ extract_mu_coefficients <- function(fit) {
     s_obj <- NULL
     utils::capture.output({
       s_obj <- summary(fit, what = "mu")
-    }, file = NULL)
+    }, file = character())
     s_obj
   })
 

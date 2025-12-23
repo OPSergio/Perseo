@@ -398,6 +398,110 @@ head(fit$results)
 
 ---
 
+### Working with Multi-Level Factors
+
+When your design includes a factor with >2 levels (e.g., `Status` with levels Healthy, Mild, Severe), the default model output provides coefficients for each level **relative to the reference level** (treatment coding). To obtain **custom contrasts** between levels (e.g., Mild-Severe, or average of Mild+Severe vs Healthy), pass a **contrast matrix** `makeContrasts`:
+
+**Example: Custom Contrast Matrix**
+
+```r
+# Simulate data with 3-level Status factor
+metadata <- data.frame(
+  Status = factor(rep(c("Healthy", "Mild", "Severe"), each = 20)),
+  Age = rnorm(60, 50, 10)
+)
+
+# Create design matrix (Healthy is reference by default)
+design <- model.matrix(~ Status + Age, data = metadata)
+colnames(design)
+#> [1] "(Intercept)" "StatusMild"  "StatusSevere" "Age"
+
+# Define contrasts of interest
+# Each row is a linear combination of coefficients
+C <- rbind(
+  "Mild_vs_Severe" = c(0, 1, -1, 0),      # StatusMild - StatusSevere
+  "MS_avg_vs_Healthy" = c(0, 0.5, 0.5, 0) # (Mild + Severe)/2 - Healthy
+)
+colnames(C) <- colnames(design)
+
+# Fit with custom contrasts
+fit <- fit_gamlss_models(
+  counts_matrix = counts,
+  design_matrix = design,
+  candidate_families = c("NBI", "GG", "LOGNO"),
+  contrast_matrix = C,  # Pass contrast matrix directly
+  workers = 4
+)
+
+# Standard coefficient results (Mild-Healthy, Severe-Healthy, Age effect)
+head(fit$results)
+# A tibble: 6 × 7
+#  feature   term          effect     se  stat    pval    padj
+#  <chr>     <chr>          <dbl>  <dbl> <dbl>   <dbl>   <dbl>
+#1 GENE_001  StatusMild     0.234  0.089  2.63 0.00856 0.0234
+#2 GENE_001  StatusSevere   0.567  0.092  6.16 7.3e-10 2.1e-9
+#3 GENE_001  Age            0.012  0.005  2.40 0.0164  0.0352
+
+# Custom contrasts (Mild-Severe, avg of Mild+Severe vs Healthy)
+head(fit$contrasts)
+# A tibble: 6 × 8
+#  feature  family contrast             estimate    se     z p_value  p_adj
+#  <chr>    <chr>  <chr>                   <dbl> <dbl> <dbl>   <dbl>  <dbl>
+#1 GENE_001 NBI    Mild_vs_Severe         -0.333 0.095 -3.51 0.00045 0.00128
+#2 GENE_001 NBI    MS_avg_vs_Healthy       0.401 0.064  6.27 3.6e-10 1.1e-9
+#3 GENE_002 GG     Mild_vs_Severe         -0.078 0.088 -0.89 0.375   0.523
+#4 GENE_002 GG     MS_avg_vs_Healthy       0.084 0.061  1.38 0.168   0.287
+```
+
+**Outputs**
+
+When `contrast_matrix` is provided, the output list includes a third element:
+
+- `contrasts` (multiple rows per feature; one per contrast)
+  - `feature`: feature ID
+  - `family`: best-fitting family for this feature
+  - `contrast`: contrast name (from `rownames(C)`)
+  - `estimate`: point estimate of the linear combination
+  - `se`: standard error (computed from variance-covariance matrix)
+  - `z`: z-statistic
+  - `p_value`: two-sided p-value
+  - `p_adj`: FDR-adjusted p-value (BH correction **by contrast** across features)
+
+**Building Contrast Matrices**
+
+Each row of the contrast matrix defines a linear combination of model coefficients:
+
+```r
+# For design with columns: (Intercept), StatusMild, StatusSevere, Age
+# Coefficients represent:
+# - (Intercept): baseline (Healthy group at Age=0)
+# - StatusMild: Mild - Healthy
+# - StatusSevere: Severe - Healthy
+# - Age: linear age effect
+
+# Example contrasts:
+C <- rbind(
+  # Mild vs Severe: (StatusMild) - (StatusSevere)
+  "Mild_vs_Severe" = c(0, 1, -1, 0),
+  
+  # Healthy vs average of diseased: 0 - (StatusMild + StatusSevere)/2
+  "Healthy_vs_Disease" = c(0, -0.5, -0.5, 0),
+  
+  # Severe vs Healthy (same as coefficient StatusSevere)
+  "Severe_vs_Healthy" = c(0, 0, 1, 0)
+)
+colnames(C) <- c("(Intercept)", "StatusMild", "StatusSevere", "Age")
+```
+
+**Important Notes**
+
+- Contrasts are computed using `vcov(fit, what = "mu")`. If the covariance matrix extraction fails or contains non-finite values, contrasts will be `NA` for that feature (the function does **not** error).
+- The `p_adj` column in `contrasts` is computed **by contrast** across all features (e.g., all "Mild_vs_Severe" comparisons are adjusted together).
+- Standard coefficient results in `fit$results` remain unchanged—contrasts are an **additional output**.
+- The model is **re-fitted** for the best family when contrasts are requested to extract `vcov`, which adds computational overhead.
+
+---
+
 ### Utilities
 
 - `transform_for_family_strict(y, fam, eps = 1e-6, allow_eps = TRUE)`  

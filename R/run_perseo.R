@@ -10,6 +10,10 @@
 #' @param counts_matrix Numeric matrix (features × samples) with rownames as feature IDs.
 #' @param design_matrix Data frame or matrix with covariates (samples × predictors).
 #'   Will be cleaned automatically (intercept column removed, dimension validated).
+#' @param contrast_matrix Optional numeric matrix where each row defines a linear
+#'   combination of mu coefficients. Column names must match coefficient names from
+#'   the design matrix. If provided, contrasts are computed and adjusted for multiple
+#'   testing. Use limma::makeContrasts() to build contrast matrices easily.
 #' @param n_genes Integer, number of features to sample per bootstrap pull for family
 #'   selection (default: 200).
 #' @param n_boot Integer, number of bootstrap pulls for family selection (default: 10).
@@ -39,7 +43,8 @@
 #'   \item{family_selection}{Output from `find_families()`: top families overall and
 #'     by support, frequency tables, sampled results tibble.}
 #'   \item{differential_expression}{Output from `fit_gamlss_models()` with FDR-adjusted
-#'     p-values: fitted models tibble with per-term statistics.}
+#'     p-values: results tibble with per-term statistics, selection tibble with best
+#'     family per feature, and contrasts tibble (if contrast_matrix provided).}
 #'   \item{summary}{List with execution summary: number of features tested, families selected,
 #'     models fitted, adjustment method used, and transform_mode.}
 #' }
@@ -66,31 +71,51 @@
 #'
 #' @examples
 #' \dontrun{
-#' # Prepare data
-#' metadata$condition <- relevel(factor(metadata$condition), ref = "Control")
-#' design <- model.matrix(~ condition + age + batch, data = metadata)
+#' # Basic example: Differential expression
+#' metadata$tissue_type <- relevel(factor(metadata$tissue_type), ref = "Normal")
+#' design <- model.matrix(~ tissue_type + age + gender, data = metadata)
 #' counts <- as.matrix(expression_data[, rownames(design)])
 #'
-#' # Run complete workflow
 #' results <- run_perseo(
 #'   counts_matrix = counts,
 #'   design_matrix = design,
 #'   n_genes = 200,
 #'   n_boot = 10,
 #'   top_n = 4,
-#'   criterion = "GAIC",
+#'   criterion = "BIC",
 #'   p_adjust_method = "BH",
 #'   verbose = TRUE,
 #'   seed = 12345
 #' )
 #'
-#' # Inspect results
-#' print(results$summary)
-#' head(results$differential_expression$models)
-#'
 #' # Extract significant features (FDR < 0.05)
-#' sig_features <- results$differential_expression$models %>%
+#' sig_features <- results$differential_expression$results %>%
 #'   filter(term != "(Intercept)", p_adj < 0.05)
+#'
+#' # Advanced: Custom contrasts for multi-level factors
+#' # Build contrast matrix manually
+#' coef_names <- colnames(design)
+#' contrast_matrix <- matrix(0, nrow = 3, ncol = length(coef_names))
+#' colnames(contrast_matrix) <- coef_names
+#' rownames(contrast_matrix) <- c("Tumor_vs_Normal", "Metastasis_vs_Normal", "Metastasis_vs_Tumor")
+#' 
+#' contrast_matrix["Tumor_vs_Normal", "tissue_typeTumor"] <- 1
+#' contrast_matrix["Metastasis_vs_Normal", "tissue_typeMetastasis"] <- 1
+#' contrast_matrix["Metastasis_vs_Tumor", "tissue_typeMetastasis"] <- 1
+#' contrast_matrix["Metastasis_vs_Tumor", "tissue_typeTumor"] <- -1
+#'
+#' results_contrasts <- run_perseo(
+#'   counts_matrix = counts,
+#'   design_matrix = design,
+#'   contrast_matrix = contrast_matrix,
+#'   criterion = "BIC",
+#'   p_adjust_method = "BH",
+#'   seed = 12345
+#' )
+#'
+#' # View contrast results
+#' sig_contrasts <- results_contrasts$differential_expression$contrasts %>%
+#'   filter(p_adj < 0.05)
 #' }
 #'
 #' @seealso
@@ -100,6 +125,7 @@
 #' @export
 run_perseo <- function(counts_matrix,
                        design_matrix,
+                       contrast_matrix = NULL,
                        n_genes = 200,
                        n_boot = 10,
                        top_n = 4,
@@ -189,6 +215,8 @@ run_perseo <- function(counts_matrix,
     criterion = criterion,
     gaic_k = gaic_k,
     min_n = min_n,
+    contrast_matrix = contrast_matrix,
+    p_adjust = "none",  # We'll do global adjustment below
     transform_mode = family_results$transform_mode
   )
   
@@ -222,6 +250,22 @@ run_perseo <- function(counts_matrix,
   } else {
     if (verbose) {
       message("No models fitted successfully.")
+    }
+  }
+  
+  # Apply p-value adjustment to contrasts if present
+  if (!is.null(de_results$contrasts) && nrow(de_results$contrasts) > 0) {
+    p_values_contrasts <- de_results$contrasts$p_value
+    p_adjusted_contrasts <- stats::p.adjust(p_values_contrasts, method = p_adjust_method)
+    de_results$contrasts$p_adj <- p_adjusted_contrasts
+    
+    if (verbose) {
+      n_sig_raw_c <- sum(p_values_contrasts < 0.05, na.rm = TRUE)
+      n_sig_adj_c <- sum(p_adjusted_contrasts < 0.05, na.rm = TRUE)
+      message(sprintf(
+        "Significant contrasts (p < 0.05): %d raw, %d adjusted",
+        n_sig_raw_c, n_sig_adj_c
+      ))
     }
   }
   

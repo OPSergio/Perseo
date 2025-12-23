@@ -10,8 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Optional bootstrap mode**: `find_families()` and `run_perseo()` now accept `bootstrap` parameter
+  - `bootstrap = TRUE` (default): Fast bootstrap sampling of features
+  - `bootstrap = FALSE`: Full evaluation of all families on ALL features (comprehensive but slower)
+  - Allows users to choose between speed and exhaustive family selection
 - **Custom contrast matrices**: `fit_gamlss_models()` now accepts `contrast_matrix` parameter
-  - Limma-style contrast specification for arbitrary linear combinations of coefficients
+  - Contrast specification for arbitrary linear combinations of coefficients
   - Enables extraction of contrasts between non-reference levels (e.g., B-C when A is reference)
   - Returns contrasts tibble with estimates, standard errors, z-statistics, and p-values
   - Full FDR correction across features for contrast p-values

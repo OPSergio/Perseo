@@ -14,9 +14,13 @@
 #'   combination of mu coefficients. Column names must match coefficient names from
 #'   the design matrix. If provided, contrasts are computed and adjusted for multiple
 #'   testing. Use limma::makeContrasts() to build contrast matrices easily.
+#' @param bootstrap Logical, whether to use bootstrap sampling for family selection
+#'   (default: TRUE). If TRUE, randomly samples n_genes features in n_boot pulls.
+#'   If FALSE, evaluates all families on ALL features (full evaluation).
 #' @param n_genes Integer, number of features to sample per bootstrap pull for family
-#'   selection (default: 200).
+#'   selection (default: 200). Ignored if bootstrap = FALSE.
 #' @param n_boot Integer, number of bootstrap pulls for family selection (default: 10).
+#'   Ignored if bootstrap = FALSE.
 #' @param top_n Integer, number of top families to use in differential expression
 #'   (default: 4).
 #' @param families Character vector of candidate families; if NULL, uses default set.
@@ -126,6 +130,7 @@
 run_perseo <- function(counts_matrix,
                        design_matrix,
                        contrast_matrix = NULL,
+                       bootstrap = TRUE,
                        n_genes = 200,
                        n_boot = 10,
                        top_n = 4,
@@ -160,6 +165,7 @@ run_perseo <- function(counts_matrix,
   
   family_results <- find_families(
     counts_matrix = counts_matrix,
+    bootstrap = bootstrap,
     n_genes = n_genes,
     n_boot = n_boot,
     top_n = top_n,

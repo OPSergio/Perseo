@@ -148,6 +148,26 @@ sig_results <- results$differential_expression$results %>%
   filter(p_adj < 0.05, grepl("^tissue_type", term))
 ```
 
+### Full Evaluation Mode (No Bootstrap)
+
+For comprehensive analysis, evaluate all families on all features:
+
+```r
+# Run PERSEO without bootstrap sampling
+results_full <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = design,
+  bootstrap = FALSE,       # Evaluate ALL features
+  top_n = 4,
+  criterion = "BIC",
+  p_adjust_method = "BH",
+  verbose = TRUE,
+  seed = 123
+)
+
+# This mode is slower but provides complete family selection for every feature
+```
+
 ### Custom Contrasts (Multi-Level Factors)
 
 When you have 3+ levels in a factor and want to compare non-reference levels (e.g., comparing tumor subtypes when "Normal" is reference), use **custom contrast matrices**:
@@ -237,6 +257,7 @@ results <- run_perseo(
   counts_matrix,
   design_matrix,
   contrast_matrix = NULL,
+  bootstrap = TRUE,
   n_genes = 200,
   n_boot = 10,
   top_n = 4,
@@ -257,15 +278,21 @@ results <- run_perseo(
 
 - `counts_matrix`: numeric matrix (features × samples)
 - `design_matrix`: model matrix with nrow = ncol(counts_matrix)
-- `contrast_matrix`: optional numeric matrix for custom contrasts (limma-style)
-- `n_genes`: number of features to sample for family selection
-- `n_boot`: bootstrap iterations for family selection
+- `contrast_matrix`: optional numeric matrix for custom contrasts
+- `bootstrap`: if TRUE (default), uses bootstrap sampling; if FALSE, evaluates all features
+- `n_genes`: number of features to sample per bootstrap pull (ignored if bootstrap = FALSE)
+- `n_boot`: bootstrap iterations (ignored if bootstrap = FALSE)
 - `top_n`: number of top families to select
 - `families`: candidate families (NULL = use defaults)
 - `criterion`: "GAIC", "BIC", or "AIC"
 - `p_adjust_method`: "BH", "bonferroni", "holm", etc.
 - `verbose`: show progress messages
 - `seed`: for reproducibility
+
+**Bootstrap vs Full Evaluation**
+
+- `bootstrap = TRUE` (default): Fast, samples a subset of features to identify common families
+- `bootstrap = FALSE`: Comprehensive, evaluates all families on ALL features (slower but thorough)
 
 **Returns**
 

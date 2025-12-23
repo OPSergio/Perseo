@@ -11,7 +11,7 @@
 #' @return A tibble with columns:
 #'   \describe{
 #'     \item{contrast}{Contrast name (from rownames(C))}
-#'     \item{estimate}{Point estimate C %*% beta}
+#'     \item{estimate}{Point estimate (C times beta)}
 #'     \item{se}{Standard error}
 #'     \item{z}{z-statistic}
 #'     \item{p_value}{Two-sided p-value}
@@ -131,13 +131,13 @@ apply_contrasts <- function(beta, V, C) {
 #'
 #' @return A list with:
 #'   \describe{
-#'     \item{results}{tibble with columns: `feature`, `term`, `effect`, `se`,
-#'       `stat`, `pval`, `padj`.}
-#'     \item{selection}{tibble with columns: `feature`, `best_family`,
-#'       `n_valid_obs`, `ic_value` (Jacobian-corrected IC), `transform_mode`.}
-#'     \item{contrasts}{tibble with columns: `feature`, `family`, `contrast`,
-#'       `estimate`, `se`, `z`, `p_value`, `p_adj`. Only present if
-#'       `contrast_matrix` is not NULL.}
+#'     \item{results}{tibble with columns: feature, term, effect, se,
+#'       stat, pval, padj.}
+#'     \item{selection}{tibble with columns: feature, best_family,
+#'       n_valid_obs, ic_value (Jacobian-corrected IC), transform_mode.}
+#'     \item{contrasts}{tibble with columns: feature, family, contrast,
+#'       estimate, se, z, p_value, p_adj. Only present if
+#'       contrast_matrix is not NULL.}
 #'   }
 #'
 #' @details Family comparison uses transformations (strict or safe), a common mask
@@ -216,17 +216,17 @@ fit_gamlss_models <- function(counts_matrix,
   process_one_feature <- function(feature_name, feature_vec, design_mat, prog) {
     if (!is.null(prog)) prog()
     
-    if (has_insufficient_variation(feature_vec)) {
+    if (PERSEO:::has_insufficient_variation(feature_vec)) {
       return(NULL)
     }
     
     # Infer binomial denominator if BI/BB families are candidates
-    bd_vec <- if (any(is_binomial_family(candidate_families))) {
-      infer_binomial_denominator(feature_vec)
+    bd_vec <- if (any(PERSEO:::is_binomial_family(candidate_families))) {
+      PERSEO:::infer_binomial_denominator(feature_vec)
     } else NULL
     
     # group_by_support hard-coded to FALSE: test all families
-    family_results <- compare_families_with_design(
+    family_results <- PERSEO:::compare_families_with_design(
       feature_vec,
       design_mat,
       families = candidate_families,
@@ -258,22 +258,22 @@ fit_gamlss_models <- function(counts_matrix,
     if (!is.null(contrast_matrix)) {
       contrast_df <- tryCatch({
         # Re-fit best model to extract vcov
-        tr <- transform_response(feature_vec, best$family, mode = transform_mode)
+        tr <- PERSEO:::transform_response(feature_vec, best$family, mode = transform_mode)
         z <- tr$y[tr$mask]
         
         # Prepare data
         fit_data <- cbind.data.frame(y = z, design_mat[tr$mask, , drop = FALSE])
         
         # Instantiate family
-        fam_obj <- instantiate_gamlss_family(
+        fam_obj <- PERSEO:::instantiate_gamlss_family(
           best$family,
-          bd_vec = if (is_binomial_family(best$family)) {
-            infer_binomial_denominator(feature_vec, tr$mask)
+          bd_vec = if (PERSEO:::is_binomial_family(best$family)) {
+            PERSEO:::infer_binomial_denominator(feature_vec, tr$mask)
           } else NULL
         )
         
         # Re-fit with same formula as compare_families_with_design (y ~ .)
-        best_fit <- fit_gamlss_safely(y ~ ., data = fit_data, family_obj = fam_obj)
+        best_fit <- PERSEO:::fit_gamlss_safely(y ~ ., data = fit_data, family_obj = fam_obj)
         
         if (!is.null(best_fit)) {
           beta <- tryCatch({
@@ -321,7 +321,7 @@ fit_gamlss_models <- function(counts_matrix,
           }
           
           if (!is.null(beta) && !is.null(V) && all(is.finite(V))) {
-            contrast_res <- apply_contrasts(beta, V, contrast_matrix)
+            contrast_res <- PERSEO:::apply_contrasts(beta, V, contrast_matrix)
             contrast_res$feature <- feature_name
             contrast_res$family <- best$family
             contrast_res  # Return this

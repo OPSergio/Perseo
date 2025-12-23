@@ -72,41 +72,19 @@ fit_gamlss_safely <- function(formula, data, family_obj) {
     # Store family_obj BEFORE calling gamlss so it's in scope
     family_obj_stored <- family_obj
     
-    # Save current options and set to suppress printing
-    old_options <- options(
-      show.error.messages = FALSE,
-      warn = -1
-    )
-    on.exit(options(old_options), add = TRUE)
-    
-    # Close any existing sinks before opening new ones
-    while (sink.number(type = "output") > 0) sink(type = "output")
-    while (sink.number(type = "message") > 0) sink(type = "message")
-    
-    # Create temp file and redirect output
-    tmp <- tempfile()
-    on.exit(unlink(tmp), add = TRUE)
-    
-    # Open connection to temp file
-    con <- file(tmp, open = "wt")
-    
-    # Redirect both output and messages
-    sink(con, type = "output")
-    sink(con, type = "message")
-    on.exit({
-      sink(type = "message")
-      sink(type = "output") 
-      close(con)
-    }, add = TRUE)
-    
-    fit_result <- gamlss::gamlss(
-      formula = formula,
-      data = data,
-      family = family_obj,
-      trace = FALSE,
-      control = gamlss::gamlss.control(trace = FALSE, c.crit = 0.001),
-      i.control = gamlss::glim.control(trace = FALSE)
-    )
+    # Fit with trace=FALSE to suppress convergence messages
+    # Note: gamlss may still print summary via print method in some contexts
+    # but this is safe for parallel execution (no sinks/file handles)
+    fit_result <- suppressWarnings(suppressMessages(
+      gamlss::gamlss(
+        formula = formula,
+        data = data,
+        family = family_obj,
+        trace = FALSE,
+        control = gamlss::gamlss.control(trace = FALSE, c.crit = 0.001),
+        i.control = gamlss::glim.control(trace = FALSE)
+      )
+    ))
     
     # Store family_obj in fit for vcov() to find it
     if (!is.null(fit_result)) {
@@ -115,9 +93,6 @@ fit_gamlss_safely <- function(formula, data, family_obj) {
     
     fit_result
   }, error = function(e) {
-    # Make sure to close sinks on error
-    try(sink(type = "message"), silent = TRUE)
-    try(sink(type = "output"), silent = TRUE)
     NULL
   })
 }
@@ -175,13 +150,10 @@ compute_jacobian_corrected_ic <- function(fit, penalty, logJ_sum) {
 #' @keywords internal
 extract_mu_coefficients <- function(fit) {
   # Get summary output while suppressing messages
-  summary_obj <- suppressWarnings({
-    s_obj <- NULL
-    utils::capture.output({
-      s_obj <- summary(fit, what = "mu")
-    }, file = character())
-    s_obj
-  })
+  # Note: summary() may still print in some contexts, but this is safe for parallel
+  summary_obj <- suppressWarnings(suppressMessages({
+    summary(fit, what = "mu")
+  }))
 
   # Helper to coerce various table structures
   coerce_summary_table <- function(tab) {

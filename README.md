@@ -96,16 +96,31 @@ mode(counts_matrix) <- "numeric"
 
 **PERSEO** provides a high-level orchestration function `run_perseo()` that handles the complete workflow in a single call:
 
-```r
-library(perseo)
+### Basic Differential Expression
 
-# Prepare your data
-metadata$condition <- relevel(factor(metadata$condition), ref = "Control")
-design <- model.matrix(~ condition + age + batch, data = metadata)
+```r
+library(PERSEO)
+library(dplyr)
+
+# 1. Load your own omics data
+# counts: matrix with features (genes/proteins/metabolites) in rows, samples in columns
+# metadata: data.frame with sample information and covariates
+
+# 2. Set reference level for your condition of interest
+metadata$tissue_type <- relevel(factor(metadata$tissue_type), ref = "Normal")
+
+# 3. Build design matrix with covariates
+design <- model.matrix(
+  ~ tissue_type + age_at_diagnosis + gender + initial_weight +
+    laterality + ajcc_pathologic_stage,
+  data = metadata
+)
+
+# 4. Align counts to design rows
 counts_matrix <- as.matrix(counts[, rownames(design)])
 mode(counts_matrix) <- "numeric"
 
-# Run complete PERSEO pipeline
+# 5. Run complete PERSEO pipeline
 results <- run_perseo(
   counts_matrix = counts_matrix,
   design_matrix = design,
@@ -114,34 +129,117 @@ results <- run_perseo(
   top_n = 4,               # Top families to select
   criterion = "BIC",       # Model selection criterion
   min_n = 20,              # Minimum valid observations
-  p_adjust_method = "BH", # Multiple testing correction
+  p_adjust_method = "BH",  # Multiple testing correction
   verbose = TRUE,          # Show progress messages
   seed = 123               # Reproducibility
 )
 
-# View results summary
+# 6. View results summary
 print(results)
 
-# Access components
-head(results$differential_expression$results)  # DE results with FDR
+# 7. Access components
+head(results$differential_expression$results)   # DE results with FDR
 head(results$differential_expression$selection) # Best family per feature
 results$family_selection$top_families_overall   # Selected families
 results$summary                                  # Execution summary
 
-# Filter significant results (FDR < 0.05)
+# 8. Filter significant results (FDR < 0.05)
 sig_results <- results$differential_expression$results %>%
-  filter(p_adj < 0.05, grepl("^condition", term))
+  filter(p_adj < 0.05, grepl("^tissue_type", term))
+```
+
+### Full Evaluation Mode (No Bootstrap)
+
+For comprehensive analysis, evaluate all families on all features:
+
+```r
+# Run PERSEO without bootstrap sampling
+results_full <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = design,
+  bootstrap = FALSE,       # Evaluate ALL features
+  top_n = 4,
+  criterion = "BIC",
+  p_adjust_method = "BH",
+  verbose = TRUE,
+  seed = 123
+)
+
+# This mode is slower but provides complete family selection for every feature
+```
+
+### Custom Contrasts (Multi-Level Factors)
+
+When you have 3+ levels in a factor and want to compare non-reference levels (e.g., comparing tumor subtypes when "Normal" is reference), use **custom contrast matrices**:
+
+```r
+# 1. Prepare data
+metadata$tissue_type <- relevel(factor(metadata$tissue_type), ref = "Normal")
+design <- model.matrix(
+  ~ tissue_type + age_at_diagnosis + gender,
+  data = metadata
+)
+counts_matrix <- as.matrix(counts[, rownames(design)])
+
+# 2. Build custom contrast matrix manually
+# Columns must match coefficient names from design matrix
+# Rows define contrasts of interest
+coef_names <- colnames(design)
+# Example: Assuming design has coefficients: 
+# (Intercept), tissue_typeLuminal, tissue_typeBasal, age_at_diagnosis, genderMale
+
+contrast_matrix <- matrix(0, nrow = 3, ncol = length(coef_names))
+colnames(contrast_matrix) <- coef_names
+rownames(contrast_matrix) <- c("Luminal_vs_Normal", "Basal_vs_Normal", "Basal_vs_Luminal")
+
+# Luminal vs Normal (just the Luminal coefficient)
+contrast_matrix["Luminal_vs_Normal", "tissue_typeLuminal"] <- 1
+
+# Basal vs Normal (just the Basal coefficient)
+contrast_matrix["Basal_vs_Normal", "tissue_typeBasal"] <- 1
+
+# Basal vs Luminal (Basal - Luminal)
+contrast_matrix["Basal_vs_Luminal", "tissue_typeBasal"] <- 1
+contrast_matrix["Basal_vs_Luminal", "tissue_typeLuminal"] <- -1
+
+# 3. Run PERSEO with contrasts
+results <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = design,
+  contrast_matrix = contrast_matrix,  # Add contrast matrix
+  n_genes = 200,
+  n_boot = 10,
+  top_n = 4,
+  criterion = "BIC",
+  p_adjust_method = "BH",
+  verbose = TRUE,
+  seed = 123
+)
+
+# 4. Access contrast results
+head(results$differential_expression$contrasts)  # Contrast estimates, SE, z-scores, p-values
+
+# 5. Filter significant contrasts (FDR < 0.05)
+sig_contrasts <- results$differential_expression$contrasts %>%
+  filter(p_adj < 0.05)
+
+# Example: Find features with significant Basal vs Luminal differences
+basal_luminal_diff <- sig_contrasts %>%
+  filter(contrast == "Basal_vs_Luminal", abs(estimate) > 1)
 ```
 
 **What `run_perseo()` does:**
 
 1. **Family Selection**: Bootstraps a subset of features to identify the most frequently selected GAMLSS families
 2. **Differential Expression**: Fits selected families to all features and picks the best model per feature
-3. **Multiple Testing Correction**: Applies global FDR adjustment across all tests
+3. **Custom Contrasts** (optional): Computes arbitrary linear combinations of coefficients (e.g., comparing non-reference levels)
+4. **Multiple Testing Correction**: Applies global FDR adjustment across all tests
 
-**Returns** a `perseo_results` object with three components:
+**Returns** a `perseo_results` object with:
 - `$family_selection`: Family selection bootstrap results
-- `$differential_expression`: DE models with adjusted p-values
+- `$differential_expression$results`: DE results with adjusted p-values
+- `$differential_expression$selection`: Best family per feature
+- `$differential_expression$contrasts`: Contrast results (if `contrast_matrix` provided)
 - `$summary`: Execution metadata and status
 
 ---
@@ -158,6 +256,8 @@ One-function workflow combining family selection, differential expression, and p
 results <- run_perseo(
   counts_matrix,
   design_matrix,
+  contrast_matrix = NULL,
+  bootstrap = TRUE,
   n_genes = 200,
   n_boot = 10,
   top_n = 4,
@@ -178,14 +278,21 @@ results <- run_perseo(
 
 - `counts_matrix`: numeric matrix (features × samples)
 - `design_matrix`: model matrix with nrow = ncol(counts_matrix)
-- `n_genes`: number of features to sample for family selection
-- `n_boot`: bootstrap iterations for family selection
+- `contrast_matrix`: optional numeric matrix for custom contrasts
+- `bootstrap`: if TRUE (default), uses bootstrap sampling; if FALSE, evaluates all features
+- `n_genes`: number of features to sample per bootstrap pull (ignored if bootstrap = FALSE)
+- `n_boot`: bootstrap iterations (ignored if bootstrap = FALSE)
 - `top_n`: number of top families to select
 - `families`: candidate families (NULL = use defaults)
 - `criterion`: "GAIC", "BIC", or "AIC"
 - `p_adjust_method`: "BH", "bonferroni", "holm", etc.
 - `verbose`: show progress messages
 - `seed`: for reproducibility
+
+**Bootstrap vs Full Evaluation**
+
+- `bootstrap = TRUE` (default): Fast, samples a subset of features to identify common families
+- `bootstrap = FALSE`: Comprehensive, evaluates all families on ALL features (slower but thorough)
 
 **Returns**
 
@@ -395,6 +502,110 @@ head(fit$results)
   avoid double intercepts when using `y ~ .`.
 - The **common mask** combines family domain validity and `complete.cases(design)` to prevent
   optimizer failures (e.g., `sigma` working vector issues).
+
+---
+
+### Working with Multi-Level Factors
+
+When your design includes a factor with >2 levels (e.g., `Status` with levels Healthy, Mild, Severe), the default model output provides coefficients for each level **relative to the reference level** (treatment coding). To obtain **custom contrasts** between levels (e.g., Mild-Severe, or average of Mild+Severe vs Healthy), pass a **contrast matrix** `makeContrasts`:
+
+**Example: Custom Contrast Matrix**
+
+```r
+# Simulate data with 3-level Status factor
+metadata <- data.frame(
+  Status = factor(rep(c("Healthy", "Mild", "Severe"), each = 20)),
+  Age = rnorm(60, 50, 10)
+)
+
+# Create design matrix (Healthy is reference by default)
+design <- model.matrix(~ Status + Age, data = metadata)
+colnames(design)
+#> [1] "(Intercept)" "StatusMild"  "StatusSevere" "Age"
+
+# Define contrasts of interest
+# Each row is a linear combination of coefficients
+C <- rbind(
+  "Mild_vs_Severe" = c(0, 1, -1, 0),      # StatusMild - StatusSevere
+  "MS_avg_vs_Healthy" = c(0, 0.5, 0.5, 0) # (Mild + Severe)/2 - Healthy
+)
+colnames(C) <- colnames(design)
+
+# Fit with custom contrasts
+fit <- fit_gamlss_models(
+  counts_matrix = counts,
+  design_matrix = design,
+  candidate_families = c("NBI", "GG", "LOGNO"),
+  contrast_matrix = C,  # Pass contrast matrix directly
+  workers = 4
+)
+
+# Standard coefficient results (Mild-Healthy, Severe-Healthy, Age effect)
+head(fit$results)
+# A tibble: 6 × 7
+#  feature   term          effect     se  stat    pval    padj
+#  <chr>     <chr>          <dbl>  <dbl> <dbl>   <dbl>   <dbl>
+#1 GENE_001  StatusMild     0.234  0.089  2.63 0.00856 0.0234
+#2 GENE_001  StatusSevere   0.567  0.092  6.16 7.3e-10 2.1e-9
+#3 GENE_001  Age            0.012  0.005  2.40 0.0164  0.0352
+
+# Custom contrasts (Mild-Severe, avg of Mild+Severe vs Healthy)
+head(fit$contrasts)
+# A tibble: 6 × 8
+#  feature  family contrast             estimate    se     z p_value  p_adj
+#  <chr>    <chr>  <chr>                   <dbl> <dbl> <dbl>   <dbl>  <dbl>
+#1 GENE_001 NBI    Mild_vs_Severe         -0.333 0.095 -3.51 0.00045 0.00128
+#2 GENE_001 NBI    MS_avg_vs_Healthy       0.401 0.064  6.27 3.6e-10 1.1e-9
+#3 GENE_002 GG     Mild_vs_Severe         -0.078 0.088 -0.89 0.375   0.523
+#4 GENE_002 GG     MS_avg_vs_Healthy       0.084 0.061  1.38 0.168   0.287
+```
+
+**Outputs**
+
+When `contrast_matrix` is provided, the output list includes a third element:
+
+- `contrasts` (multiple rows per feature; one per contrast)
+  - `feature`: feature ID
+  - `family`: best-fitting family for this feature
+  - `contrast`: contrast name (from `rownames(C)`)
+  - `estimate`: point estimate of the linear combination
+  - `se`: standard error (computed from variance-covariance matrix)
+  - `z`: z-statistic
+  - `p_value`: two-sided p-value
+  - `p_adj`: FDR-adjusted p-value (BH correction **by contrast** across features)
+
+**Building Contrast Matrices**
+
+Each row of the contrast matrix defines a linear combination of model coefficients:
+
+```r
+# For design with columns: (Intercept), StatusMild, StatusSevere, Age
+# Coefficients represent:
+# - (Intercept): baseline (Healthy group at Age=0)
+# - StatusMild: Mild - Healthy
+# - StatusSevere: Severe - Healthy
+# - Age: linear age effect
+
+# Example contrasts:
+C <- rbind(
+  # Mild vs Severe: (StatusMild) - (StatusSevere)
+  "Mild_vs_Severe" = c(0, 1, -1, 0),
+  
+  # Healthy vs average of diseased: 0 - (StatusMild + StatusSevere)/2
+  "Healthy_vs_Disease" = c(0, -0.5, -0.5, 0),
+  
+  # Severe vs Healthy (same as coefficient StatusSevere)
+  "Severe_vs_Healthy" = c(0, 0, 1, 0)
+)
+colnames(C) <- c("(Intercept)", "StatusMild", "StatusSevere", "Age")
+```
+
+**Important Notes**
+
+- Contrasts are computed using `vcov(fit, what = "mu")`. If the covariance matrix extraction fails or contains non-finite values, contrasts will be `NA` for that feature (the function does **not** error).
+- The `p_adj` column in `contrasts` is computed **by contrast** across all features (e.g., all "Mild_vs_Severe" comparisons are adjusted together).
+- Standard coefficient results in `fit$results` remain unchanged—contrasts are an **additional output**.
+- The model is **re-fitted** for the best family when contrasts are requested to extract `vcov`, which adds computational overhead.
 
 ---
 

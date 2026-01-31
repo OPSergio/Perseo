@@ -8,6 +8,7 @@ run_perseo(
   counts_matrix,
   design_matrix,
   contrast_matrix = NULL,
+  bootstrap = TRUE,
   n_genes = 200,
   n_boot = 10,
   top_n = 4,
@@ -33,12 +34,17 @@ Will be cleaned automatically (intercept column removed, dimension validated).}
 \item{contrast_matrix}{Optional numeric matrix where each row defines a linear
 combination of mu coefficients. Column names must match coefficient names from
 the design matrix. If provided, contrasts are computed and adjusted for multiple
-testing. Use limma::makeContrasts() to build contrast matrices easily.}
+testing.}
+
+\item{bootstrap}{Logical, whether to use bootstrap sampling for family selection
+(default: TRUE). If TRUE, randomly samples n_genes features in n_boot pulls.
+If FALSE, evaluates all families on ALL features (full evaluation).}
 
 \item{n_genes}{Integer, number of features to sample per bootstrap pull for family
-selection (default: 200).}
+selection (default: 200). Ignored if bootstrap = FALSE.}
 
-\item{n_boot}{Integer, number of bootstrap pulls for family selection (default: 10).}
+\item{n_boot}{Integer, number of bootstrap pulls for family selection (default: 10).
+Ignored if bootstrap = FALSE.}
 
 \item{top_n}{Integer, number of top families to use in differential expression
 (default: 4).}

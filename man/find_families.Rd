@@ -10,35 +10,42 @@ find_families(
   n_boot = 10,
   top_n = 4,
   families = NULL,
-  verbose = TRUE,
-  min_n = 5,
-  seed = NULL,
-  group_by_support = TRUE,
-  binom_bd = NULL,
   criterion = c("GAIC", "BIC", "AIC"),
   gaic_k = NULL,
+  min_n = 5,
+  seed = NULL,
+  group_by_support = FALSE,
+  binom_bd = NULL,
   filter_beta_inflated = TRUE,
   thr_zero = 0.005,
   thr_one = 0.005,
-  transform_mode = NULL
+  bootstrap = TRUE,
+  transform_mode = "strict",
+  workers = NULL,
+  parallel = FALSE,
+  verbose = TRUE
 )
 }
 \arguments{
 \item{counts_matrix}{numeric matrix (features x samples) with rownames as feature IDs}
 
-\item{n_genes}{integer, number of features per bootstrap pull (default: 200)}
+\item{n_genes}{integer, number of features per bootstrap pull (default: 200).
+Ignored if bootstrap = FALSE.}
 
-\item{n_boot}{integer, number of bootstrap pulls (default: 10)}
+\item{n_boot}{integer, number of bootstrap pulls (default: 10).
+Ignored if bootstrap = FALSE.}
 
 \item{top_n}{integer, number of top families to return (default: 4)}
 
 \item{families}{character vector of families to consider; if NULL, a default set is used}
 
-\item{verbose}{logical, print progress (default: TRUE)}
+\item{criterion}{"GAIC", "BIC", or "AIC" (default: "GAIC")}
+
+\item{gaic_k}{numeric, penalty for GAIC. If NULL, defaults to log(n_valid)}
 
 \item{min_n}{integer, min valid samples per feature after common mask (default: 5)}
 
-\item{seed}{integer or NULL, seed for reproducibility (default: NULL)}
+\item{seed}{integer random seed for reproducibility (default NULL).}
 
 \item{group_by_support}{logical; if TRUE (default), restricts candidate families
 to those matching the empirical support of each feature. If FALSE, all families
@@ -48,15 +55,15 @@ of model fit across support boundaries at the cost of increased computation.}
 \item{binom_bd}{NULL | numeric scalar | numeric vector len = ncol(counts_matrix).
 Binomial denominator for BI/BB. If NULL, infer per feature as max(y) when consistent.}
 
-\item{criterion}{"GAIC", "BIC", or "AIC" (default: "GAIC")}
-
-\item{gaic_k}{numeric, penalty for GAIC. If NULL, defaults to log(n_valid)}
-
 \item{filter_beta_inflated}{logical, filter inflated Beta families if no 0/1 evidence (default: TRUE)}
 
 \item{thr_zero}{numeric threshold for zero inflation evidence (default: 0.005)}
 
 \item{thr_one}{numeric threshold for one inflation evidence (default: 0.005)}
+
+\item{bootstrap}{logical, whether to use bootstrap sampling (default: TRUE).
+If TRUE, randomly samples n_genes features in n_boot pulls.
+If FALSE, evaluates all families on ALL features (full evaluation, no sampling).}
 
 \item{transform_mode}{character: "strict" or "safe". Transformation mode for family comparison.
 - "strict" (default when group_by_support = TRUE): Conservative, domain-preserving.
@@ -64,18 +71,32 @@ Binomial denominator for BI/BB. If NULL, infer per feature as max(y) when consis
 - "safe" (default when group_by_support = FALSE): Global affine transformations
   to fit data into family domain. Invertible with Jacobian correction.
 If NULL, defaults based on group_by_support setting.}
+
+\item{workers}{integer number of parallel workers. Only used when `parallel = TRUE`.
+If `NULL`, uses `future::availableCores() - 1`. Default `NULL`.}
+
+\item{parallel}{logical; enable parallel processing via `future::plan(multisession)`.
+When `TRUE`, automatically configures and cleans up the future backend.
+Default `FALSE`.}
+
+\item{verbose}{logical; print progress messages (default TRUE).}
 }
 \value{
-list(
-  top_families_overall   = character[],
-  top_families_by_support= list(count=..., unit=..., positive=..., real=...),
-  freq_table_overall     = table,
-  prop_table_overall     = named numeric,
-  freq_by_support        = named list of tables,
-  prop_by_support        = named list of named numerics,
-  sampled_results        = tibble with per-feature decisions across pulls,
-  transform_mode         = character indicating mode used
-)
+A list with:
+  \describe{
+    \item{top_families_overall}{character vector (length = top_n) of most
+      frequently selected families across all bootstrap samples.}
+    \item{top_families_by_support}{named list with top families per support
+      class (count/unit/positive/real); metadata only if group_by_support=FALSE.}
+    \item{freq_table_overall}{named integer vector with selection counts.}
+    \item{prop_table_overall}{named numeric vector with selection proportions.}
+    \item{freq_by_support}{list of frequency tables by support.}
+    \item{prop_by_support}{list of proportion tables by support.}
+    \item{sampled_results}{tibble with one row per feature×bootstrap pull,
+      including columns: bootstrap, feature, family, skipped (logical),
+      n_valid (integer), support (character).}
+    \item{transform_mode}{character indicating which transformation mode was used.}
+  }
 }
 \description{
 Randomly samples features (genes, OTUs, proteins, etc.) in bootstrap pulls,
@@ -86,4 +107,43 @@ Comparisons are made on a common mask across candidate families.
 \details{
 The function aggregates results across bootstrap pulls and returns the top
 families (overall and by empirical support) with frequencies and proportions.
+
+
+Performs bootstrap family selection:
+\enumerate{
+  \item Sample n_genes features from counts_matrix.
+  \item For each feature, fit intercept-only GAMLSS models across candidate families.
+  \item Use strict transformations and a common mask to compare models on the same
+        observations.
+  \item Apply Jacobian correction so ICs are comparable on the original scale.
+  \item Record the best family per feature.
+  \item Repeat n_boot times.
+  \item Return top_n most frequently selected families overall and by support.
+}
+
+When `parallel = TRUE`, the function automatically sets up `future::plan(multisession)`
+with the specified number of workers and resets to sequential after completion.
+}
+\examples{
+\dontrun{
+# Sequential execution (default)
+ff <- find_families(
+  counts_matrix = counts,
+  n_genes = 200,
+  n_boot = 10,
+  top_n = 4,
+  criterion = "BIC"
+)
+
+# Parallel execution (automatic setup)
+ff <- find_families(
+  counts_matrix = counts,
+  n_genes = 200,
+  n_boot = 10,
+  top_n = 4,
+  criterion = "BIC",
+  parallel = TRUE,
+  workers = 8
+)
+}
 }

@@ -13,7 +13,7 @@
 #' @param contrast_matrix Optional numeric matrix where each row defines a linear
 #'   combination of mu coefficients. Column names must match coefficient names from
 #'   the design matrix. If provided, contrasts are computed and adjusted for multiple
-#'   testing. Use limma::makeContrasts() to build contrast matrices easily.
+#'   testing.
 #' @param bootstrap Logical, whether to use bootstrap sampling for family selection
 #'   (default: TRUE). If TRUE, randomly samples n_genes features in n_boot pulls.
 #'   If FALSE, evaluates all families on ALL features (full evaluation).

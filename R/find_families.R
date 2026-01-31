@@ -32,44 +32,137 @@
 #' @param filter_beta_inflated logical, filter inflated Beta families if no 0/1 evidence (default: TRUE)
 #' @param thr_zero numeric threshold for zero inflation evidence (default: 0.005)
 #' @param thr_one numeric threshold for one inflation evidence (default: 0.005)
+#' @param bootstrap logical, whether to use bootstrap sampling (default: TRUE).
+#'   If TRUE, randomly samples n_genes features in n_boot pulls.
+#'   If FALSE, evaluates all families on ALL features (full evaluation, no sampling).
 #' @param transform_mode character: "strict" or "safe". Transformation mode for family comparison.
 #'   - "strict" (default when group_by_support = TRUE): Conservative, domain-preserving.
 #'     Invalid observations excluded via mask. No data repair.
 #'   - "safe" (default when group_by_support = FALSE): Global affine transformations
 #'     to fit data into family domain. Invertible with Jacobian correction.
 #'   If NULL, defaults based on group_by_support setting.
+#' @param seed integer random seed for reproducibility (default NULL).
+#' @param workers integer number of parallel workers. Only used when `parallel = TRUE`.
+#'   If `NULL`, uses `future::availableCores() - 1`. Default `NULL`.
+#' @param parallel logical; enable parallel processing via `future::plan(multisession)`.
+#'   When `TRUE`, automatically configures and cleans up the future backend.
+#'   Default `FALSE`.
+#' @param verbose logical; print progress messages (default TRUE).
 #'
-#' @return list(
-#'   top_families_overall   = character[],
-#'   top_families_by_support= list(count=..., unit=..., positive=..., real=...),
-#'   freq_table_overall     = table,
-#'   prop_table_overall     = named numeric,
-#'   freq_by_support        = named list of tables,
-#'   prop_by_support        = named list of named numerics,
-#'   sampled_results        = tibble with per-feature decisions across pulls,
-#'   transform_mode         = character indicating mode used
+#' @return A list with:
+#'   \describe{
+#'     \item{top_families_overall}{character vector (length = top_n) of most
+#'       frequently selected families across all bootstrap samples.}
+#'     \item{top_families_by_support}{named list with top families per support
+#'       class (count/unit/positive/real); metadata only if group_by_support=FALSE.}
+#'     \item{freq_table_overall}{named integer vector with selection counts.}
+#'     \item{prop_table_overall}{named numeric vector with selection proportions.}
+#'     \item{freq_by_support}{list of frequency tables by support.}
+#'     \item{prop_by_support}{list of proportion tables by support.}
+#'     \item{sampled_results}{tibble with one row per feature×bootstrap pull,
+#'       including columns: bootstrap, feature, family, skipped (logical),
+#'       n_valid (integer), support (character).}
+#'     \item{transform_mode}{character indicating which transformation mode was used.}
+#'   }
+#'
+#' @details
+#' Performs bootstrap family selection:
+#' \enumerate{
+#'   \item Sample n_genes features from counts_matrix.
+#'   \item For each feature, fit intercept-only GAMLSS models across candidate families.
+#'   \item Use strict transformations and a common mask to compare models on the same
+#'         observations.
+#'   \item Apply Jacobian correction so ICs are comparable on the original scale.
+#'   \item Record the best family per feature.
+#'   \item Repeat n_boot times.
+#'   \item Return top_n most frequently selected families overall and by support.
+#' }
+#'
+#' When `parallel = TRUE`, the function automatically sets up `future::plan(multisession)`
+#' with the specified number of workers and resets to sequential after completion.
+#'
+#' @examples
+#' \dontrun{
+#' # Sequential execution (default)
+#' ff <- find_families(
+#'   counts_matrix = counts,
+#'   n_genes = 200,
+#'   n_boot = 10,
+#'   top_n = 4,
+#'   criterion = "BIC"
 #' )
+#'
+#' # Parallel execution (automatic setup)
+#' ff <- find_families(
+#'   counts_matrix = counts,
+#'   n_genes = 200,
+#'   n_boot = 10,
+#'   top_n = 4,
+#'   criterion = "BIC",
+#'   parallel = TRUE,
+#'   workers = 8
+#' )
+#' }
 #' @export
 find_families <- function(counts_matrix,
-                          bootstrap = TRUE,
-                          n_genes = 200,
-                          n_boot  = 10,
-                          top_n   = 4,
-                          families = NULL,
-                          verbose = TRUE,
-                          min_n = 5,
-                          seed = NULL,
-                          group_by_support = TRUE,
-                          binom_bd = NULL,
-                          criterion = c("GAIC","BIC","AIC"),
-                          gaic_k = NULL,
-                          filter_beta_inflated = TRUE,
-                          thr_zero = 0.005,
-                          thr_one  = 0.005,
-                          transform_mode = NULL) {
+                         n_genes = 200,
+                         n_boot = 10,
+                         top_n = 4,
+                         families = NULL,
+                         criterion = c("GAIC", "BIC", "AIC"),
+                         gaic_k = NULL,
+                         min_n = 5,
+                         seed = NULL,
+                         group_by_support = FALSE,
+                         binom_bd = NULL,
+                         filter_beta_inflated = TRUE,
+                         thr_zero = 0.005,
+                         thr_one = 0.005,
+                         bootstrap = TRUE,
+                         transform_mode = "strict",
+                         workers = NULL,
+                         parallel = FALSE,
+                         verbose = TRUE) {
+  criterion <- match.arg(criterion)
+  
+  # ---- Set up parallel backend if requested ----
+  original_plan <- NULL
+  if (parallel) {
+    if (!requireNamespace("future", quietly = TRUE)) {
+      stop("Package 'future' is required for parallel processing. Install it with install.packages('future')")
+    }
+    
+    # Store original plan
+    original_plan <- future::plan()
+    
+    # Determine number of workers
+    n_workers <- if (is.null(workers)) {
+      max(1, future::availableCores() - 1)
+    } else {
+      as.integer(workers)
+    }
+    
+    if (n_workers < 1) {
+      warning("workers must be >= 1; using workers = 1")
+      n_workers <- 1L
+    }
+    
+    # Set up multisession plan
+    future::plan(future::multisession, workers = n_workers)
+    
+    if (verbose) {
+      message("Parallel processing enabled with ", n_workers, " workers")
+    }
+  }
+  
+  # Ensure we reset the plan on exit
+  on.exit({
+    if (parallel && !is.null(original_plan)) {
+      future::plan(original_plan)
+    }
+  }, add = TRUE)
   
   # ---- Input validation ----
-  criterion <- match.arg(criterion)
   if (bootstrap) {
     validate_counts_matrix(counts_matrix, min_features = n_genes)
   } else {

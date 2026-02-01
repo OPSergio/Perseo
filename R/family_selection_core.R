@@ -412,22 +412,55 @@ summarize_family_frequencies <- function(sampled_results, top_n, verbose = FALSE
     names(head(tab, top_n))
   })
 
-  # Verbose reporting
+  # Enhanced verbose reporting
   if (isTRUE(verbose)) {
     n_boot <- max(sampled_results$bootstrap, na.rm = TRUE)
     n_genes <- nrow(sampled_results) / n_boot
+    n_total_eval <- nrow(sampled_results)
+    n_skipped <- sum(sampled_results$skipped, na.rm = TRUE)
+    n_success <- nrow(fitted)
+    success_rate <- n_success / n_total_eval * 100
     
-    message("\n===== Summary Report =====")
-    message("Bootstrap pulls       : ", n_boot)
-    message("Features per pull     : ", n_genes)
-    message("Successful fit rows   : ", nrow(fitted), " (across pulls)")
+    message("\n", strrep("=", 80))
+    message("find_families() - FINAL REPORT")
+    message(strrep("=", 80))
+    message("\nEvaluation Summary:")
+    message("  Bootstrap pulls        : ", n_boot)
+    message("  Features per pull      : ", n_genes)
+    message("  Total evaluations      : ", n_total_eval)
+    message("  Successful fits        : ", n_success, " (", sprintf("%.1f%%", success_rate), ")")
+    message("  Skipped (low variation): ", n_skipped, " (", sprintf("%.1f%%", n_skipped/n_total_eval*100), ")")
     
     if (length(fam_freq) > 0) {
-      message("Most frequent family  : ", names(fam_freq)[1], " (", fam_freq[1], ")")
-      message("Top families overall  : ", paste(head(names(fam_freq), top_n), collapse = ", "))
+      message("\nTop Selected Families (overall):")
+      top_display <- head(fam_freq, min(10, length(fam_freq)))
+      for (i in seq_along(top_display)) {
+        fam_name <- names(top_display)[i]
+        count <- as.numeric(top_display[i])
+        pct <- count / sum(fam_freq) * 100
+        marker <- if (i <= top_n) " *" else ""
+        message(sprintf("  %2d. %-10s : %5d (%.1f%%)%s", i, fam_name, count, pct, marker))
+      }
+      if (top_n < length(top_display)) {
+        message("  (* = selected for downstream analysis)")
+      }
+      
+      # Report by support if available
+      has_support_data <- any(!is.na(fitted$support))
+      if (has_support_data) {
+        message("\nTop Families by Data Support:")
+        for (sup in supports) {
+          tab <- freq_by_support[[sup]]
+          if (length(tab) > 0) {
+            message(sprintf("  %-8s : %s", sup, paste(head(names(tab), 3), collapse = ", ")))
+          }
+        }
+      }
     } else {
-      message("No successful fits.")
+      message("\n[WARNING] No successful fits across any features.")
     }
+    
+    message(strrep("=", 80), "\n")
   }
 
   list(

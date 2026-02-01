@@ -70,26 +70,134 @@ remotes::install_github("OPSergio/Perseo")
 
 ## Data Requirements
 
-- **counts_matrix**: numeric matrix **features × samples** (rows = features, cols = samples).
-  Values must be numeric, typically non‑negative (RNA‑seq counts) or continuous (normalized assays).
-- **design_matrix**: model matrix with **nrow = ncol(counts_matrix)**. Build with `model.matrix()`.
-  It must encode your covariates of interest (e.g., tissue type, age, batch, sex…).
+### Required Inputs
 
-Example:
+**counts_matrix**: Numeric matrix with **features in rows** and **samples in columns**
 
+- Dimensions: features × samples
+- Values must be numeric (integers for count data, real numbers for continuous data)
+- Typical use cases: RNA-seq counts, proteomics intensities, metabolomics abundances
+- Row names should be feature identifiers (gene IDs, protein IDs, etc.)
+- Column names should be sample identifiers matching metadata
+
+**design_matrix**: Model specification (two options available)
+
+**Option 1: Pre-built design matrix** (traditional approach)
 ```r
-metadata$tissue_type <- stats::relevel(factor(metadata$tissue_type), ref = "Normal")
+# Build design matrix manually using model.matrix()
+metadata$tissue_type <- relevel(factor(metadata$tissue_type), ref = "Normal")
 
 design <- model.matrix(
-  ~ tissue_type + age_at_diagnosis + gender + initial_weight +
-    laterality + ajcc_pathologic_stage,
+  ~ tissue_type + age_at_diagnosis + gender + batch,
   data = metadata
 )
 
 # Align counts to design rows
 counts_matrix <- as.matrix(counts[, rownames(design)])
 mode(counts_matrix) <- "numeric"
+
+# Pass design matrix directly
+results <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = design,
+  ...
+)
 ```
+
+**Option 2: Formula string + metadata** (simplified approach)
+```r
+# Prepare metadata with sample information
+metadata <- data.frame(
+  sample_id = colnames(counts),
+  tissue_type = factor(..., levels = c("Normal", "Tumor")),
+  age_at_diagnosis = numeric_vector,
+  gender = factor(...),
+  batch = factor(...),
+  row.names = colnames(counts)  # IMPORTANT: must match count matrix columns
+)
+
+# Set reference level for factor of interest
+metadata$tissue_type <- relevel(metadata$tissue_type, ref = "Normal")
+
+# Pass formula string and metadata
+results <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = "~ tissue_type + age_at_diagnosis + gender + batch",
+  metadata = metadata,  # Required when using formula strings
+  ...
+)
+```
+
+**Key Requirements**:
+- Number of rows in design matrix (or metadata) must equal number of columns in counts_matrix
+- All samples must have complete covariate information (no NAs in design variables)
+- For formula approach: row names of metadata must match column names of counts_matrix
+- Factor variables should have reference level explicitly set using `relevel()`
+
+### Optional Inputs: Contrast Specification
+
+PERSEO provides two methods for specifying contrasts (comparisons between groups):
+
+**Method 1: Automatic contrast generation** (recommended for simple cases)
+```r
+# Automatically generate all pairwise contrasts for a factor
+results <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = "~ tissue_type + age + gender",
+  metadata = metadata,
+  contrast_variable = "tissue_type",  # Auto-generate all tissue comparisons
+  omnibus = TRUE,                     # Optional: hierarchical testing
+  ...
+)
+
+# Example: If tissue_type has levels c("Normal", "Luminal", "Basal")
+# This automatically creates:
+# - Luminal_vs_Normal
+# - Basal_vs_Normal
+# - Basal_vs_Luminal
+```
+
+**Method 2: Manual contrast matrix** (for complex custom contrasts)
+```r
+# Build design matrix to see coefficient names
+design <- model.matrix(~ tissue_type + age, data = metadata)
+colnames(design)
+#> [1] "(Intercept)" "tissue_typeLuminal" "tissue_typeBasal" "age"
+
+# Define custom contrasts as linear combinations
+contrast_matrix <- matrix(0, nrow = 3, ncol = ncol(design))
+colnames(contrast_matrix) <- colnames(design)
+rownames(contrast_matrix) <- c(
+  "Luminal_vs_Normal",      # Standard comparison
+  "Basal_vs_Luminal",       # Non-reference comparison
+  "AvgTumor_vs_Normal"      # Average of tumor subtypes vs normal
+)
+
+# Luminal vs Normal (just the Luminal coefficient)
+contrast_matrix["Luminal_vs_Normal", "tissue_typeLuminal"] <- 1
+
+# Basal vs Luminal (Basal - Luminal)
+contrast_matrix["Basal_vs_Luminal", "tissue_typeBasal"] <- 1
+contrast_matrix["Basal_vs_Luminal", "tissue_typeLuminal"] <- -1
+
+# Average of tumor subtypes vs Normal
+contrast_matrix["AvgTumor_vs_Normal", "tissue_typeLuminal"] <- 0.5
+contrast_matrix["AvgTumor_vs_Normal", "tissue_typeBasal"] <- 0.5
+
+# Pass custom contrast matrix
+results <- run_perseo(
+  counts_matrix = counts_matrix,
+  design_matrix = design,
+  contrast_matrix = contrast_matrix,  # Manual specification
+  ...
+)
+```
+
+**Choosing between methods**:
+- Use `contrast_variable` when you want ALL pairwise comparisons for a single factor
+- Use `contrast_matrix` when you need specific custom contrasts (e.g., averages, complex combinations)
+- Both methods compute standard errors, z-statistics, and FDR-adjusted p-values
+- P-values are adjusted separately for each contrast across all features
 
 ---
 
@@ -272,24 +380,24 @@ head(results$differential_expression$contrasts)
 
 #### When to Use Omnibus Testing
 
-**✅ Use when:**
-- Factor has 3+ levels
+**Use when:**
+- Factor has 3 or more levels
 - You want to control false positives more strictly
 - You have many features (1000+)
 - Computational efficiency is important
 
-**❌ Skip when:**
-- Factor has only 2 levels (omnibus = single pairwise test)
-- You have pre-specified contrasts
-- Dataset is small (< 100 features)
-- Exploratory analysis (want all contrasts)
+**Skip when:**
+- Factor has only 2 levels (omnibus reduces to single pairwise test)
+- You have pre-specified contrasts of interest
+- Dataset is small (fewer than 100 features)
+- Exploratory analysis where you want to see all contrasts
 
 #### Choosing the Omnibus Test
 
 | Test | Speed | Statistical Rigor | Best For |
 |------|-------|-------------------|----------|
-| **Wald** (default) | ⚡ Fast | Standard | Large datasets (n > 30/group), standard families |
-| **LRT** | 🐢 Slower (~2× overhead) | 🎯 More robust | Small datasets, complex families |
+| **Wald** (default) | Fast | Standard | Large datasets (n > 30/group), standard families |
+| **LRT** | Slower (approximately 2x overhead) | More robust | Small datasets, complex families |
 
 **Wald Test**:
 - Uses variance-covariance matrix from fitted model
@@ -359,22 +467,44 @@ results <- run_perseo(
 
 **Key Arguments**
 
-- `counts_matrix`: numeric matrix (features × samples)
-- `design_matrix`: model matrix with nrow = ncol(counts_matrix)
-- `contrast_matrix`: optional numeric matrix for custom contrasts
-- `contrast_variable`: character string to auto-generate all pairwise contrasts for a factor
-- `omnibus`: logical; enable hierarchical testing (omnibus → post-hoc). Default `FALSE`
-- `omnibus_threshold`: numeric; features with omnibus p > this are not contrasted. Default `0.05`
-- `omnibus_test`: character; `"Wald"` (fast) or `"LRT"` (robust). Default `"Wald"`
-- `bootstrap`: if TRUE (default), uses bootstrap sampling; if FALSE, evaluates all features
-- `n_genes`: number of features to sample per bootstrap pull (ignored if bootstrap = FALSE)
-- `n_boot`: bootstrap iterations (ignored if bootstrap = FALSE)
-- `top_n`: number of top families to select
-- `families`: candidate families (NULL = use defaults)
-- `criterion`: "GAIC", "BIC", or "AIC"
-- `p_adjust_method`: "BH", "bonferroni", "holm", etc.
-- `verbose`: show progress messages
-- `seed`: for reproducibility
+**Required inputs:**
+- `counts_matrix`: Numeric matrix (features × samples). Feature IDs in row names, sample IDs in column names.
+- `design_matrix`: Either:
+  - Pre-built model matrix from `model.matrix()` with `nrow = ncol(counts_matrix)`, OR
+  - Formula string (e.g., `"~ tissue_type + age + batch"`) when `metadata` is provided
+
+**Contrast specification (optional):**
+- `metadata`: Data frame with sample metadata. Required when:
+  - Using formula string for `design_matrix`, OR
+  - Using `contrast_variable` for automatic contrast generation
+  - Row names must match column names of `counts_matrix`
+- `contrast_matrix`: Numeric matrix for custom linear contrasts (manual specification)
+- `contrast_variable`: Character string naming a factor in `metadata` for auto-generating all pairwise contrasts
+
+**Omnibus testing (optional):**
+- `omnibus`: Logical; enable hierarchical testing (omnibus test before contrasts). Default `FALSE`
+- `omnibus_threshold`: Numeric; only compute contrasts if omnibus p-value < threshold. Default `0.05`
+- `omnibus_test`: Character; `"Wald"` (fast) or `"LRT"` (robust). Default `"Wald"`
+
+**Family selection:**
+- `bootstrap`: Logical; if `TRUE` (default), uses bootstrap sampling; if `FALSE`, evaluates all features
+- `n_genes`: Number of features to sample per bootstrap pull (ignored if `bootstrap = FALSE`)
+- `n_boot`: Number of bootstrap iterations (ignored if `bootstrap = FALSE`)
+- `top_n`: Number of top families to select after bootstrapping
+- `families`: Character vector of candidate families (`NULL` = use sensible defaults)
+
+**Model selection:**
+- `criterion`: Model selection criterion; `"GAIC"`, `"BIC"`, or `"AIC"`. Default `"GAIC"`
+- `gaic_k`: Penalty parameter for GAIC (`NULL` = adaptive penalty)
+
+**Multiple testing:**
+- `p_adjust_method`: Method for FDR correction; `"BH"`, `"bonferroni"`, `"holm"`, etc. Default `"BH"`
+
+**Computational:**
+- `parallel`: Logical; enable automatic parallel processing. Default `FALSE`
+- `workers`: Integer; number of cores (`NULL` = auto-detect)
+- `verbose`: Logical; show progress messages. Default `TRUE`
+- `seed`: Integer; for reproducibility (`NULL` = no seed)
 
 **Bootstrap vs Full Evaluation**
 
@@ -814,16 +944,16 @@ fit_lrt <- fit_gamlss_models(
 **Decision Guide**
 
 Use **Wald** when:
-- ⚡ Speed is priority
-- 📊 Standard GAMLSS families (NBI, GG, LOGNO)
-- 💻 Limited computational resources
-- 🔢 Large sample sizes (n > 30 per group)
+- Speed is priority
+- Using standard GAMLSS families (NBI, GG, LOGNO)
+- Limited computational resources
+- Large sample sizes (n > 30 per group)
 
 Use **LRT** when:
-- 🎯 Maximum statistical rigor required
-- 🔬 Complex/unusual families
-- 📐 Small sample sizes (n < 30 per group)
-- ⏱️ Computational time is not a constraint
+- Maximum statistical rigor required
+- Working with complex or unusual families
+- Small sample sizes (n < 30 per group)
+- Computational time is not a constraint
 
 ---
 

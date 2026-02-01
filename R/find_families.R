@@ -260,11 +260,25 @@ find_families <- function(counts_matrix,
   if (bootstrap) {
     # Bootstrap sampling mode
     if (isTRUE(verbose)) {
-      message("Running find_families with ", n_boot, " bootstrap pulls of ", n_genes, " features each...")
+      message("\n", strrep("=", 80))
+      message("find_families() - STARTING")
+      message(strrep("=", 80))
+      message("Mode              : Bootstrap sampling")
+      message("Bootstrap pulls   : ", n_boot)
+      message("Features/pull     : ", n_genes)
+      message("Total evaluations : ", n_boot * n_genes)
+      message("Candidate families: ", paste(families, collapse = ", "))
+      message("Transform mode    : ", transform_mode)
+      if (parallel) {
+        message("Parallel workers  : ", n_workers)
+      }
+      message(strrep("=", 80), "\n")
     }
     
     results_list <- lapply(seq_len(n_boot), function(b) {
-      if (isTRUE(verbose)) message("  Pull ", b, " of ", n_boot)
+      if (isTRUE(verbose)) {
+        message("[", format(Sys.time(), "%H:%M:%S"), "] Bootstrap pull ", b, "/", n_boot, " - sampling ", n_genes, " features...")
+      }
       pull_ids <- sample(feature_ids_all, n_genes, replace = FALSE)
       future.apply::future_lapply(
         pull_ids, 
@@ -276,7 +290,17 @@ find_families <- function(counts_matrix,
   } else {
     # Full evaluation mode (all features, no bootstrap)
     if (isTRUE(verbose)) {
-      message("Running find_families on ALL ", length(feature_ids_all), " features (no bootstrap)...")
+      message("\n", strrep("=", 80))
+      message("find_families() - STARTING")
+      message(strrep("=", 80))
+      message("Mode              : Full evaluation (no bootstrap)")
+      message("Total features    : ", length(feature_ids_all))
+      message("Candidate families: ", paste(families, collapse = ", "))
+      message("Transform mode    : ", transform_mode)
+      if (parallel) {
+        message("Parallel workers  : ", n_workers)
+      }
+      message(strrep("=", 80), "\n")
     }
     
     results_list <- list(

@@ -294,6 +294,9 @@ fit_gamlss_models <- function(counts_matrix,
     }
   }, add = TRUE)
   
+  # Store variables for final report (will be shown at the very end)
+  report_vars <- new.env()
+  
   feature_ids <- rownames(counts_matrix)
   if (is.null(feature_ids)) {
     feature_ids <- seq_len(nrow(counts_matrix))
@@ -347,6 +350,29 @@ fit_gamlss_models <- function(counts_matrix,
     if (is.null(colnames(final_contrast_matrix))) {
       stop("contrast_matrix must have column names matching coefficient names")
     }
+  }
+  
+  # ---- Print startup banner ----
+  if (show_progress) {
+    message("\n", strrep("=", 80))
+    message("fit_gamlss_models() - STARTING")
+    message(strrep("=", 80))
+    message("Total features    : ", length(feature_ids))
+    message("Samples           : ", nrow(design_subset))
+    message("Candidate families: ", paste(candidate_families, collapse = ", "))
+    message("Criterion         : ", criterion)
+    message("Transform mode    : ", transform_mode)
+    message("P-value adjustment: ", p_adjust)
+    if (parallel) {
+      message("Parallel workers  : ", n_workers)
+    }
+    if (!is.null(final_contrast_matrix)) {
+      message("Contrasts requested: ", nrow(final_contrast_matrix), " contrasts")
+      if (omnibus) {
+        message("  Omnibus test    : ", omnibus_test, " (threshold: ", omnibus_threshold, ")")
+      }
+    }
+    message(strrep("=", 80), "\n")
   }
   
   # ---- Worker function: process one feature ----
@@ -624,5 +650,117 @@ fit_gamlss_models <- function(counts_matrix,
     output$contrasts <- contrasts_df
   }
   
+  # ---- Store report data (will print on function exit) ----
+  if (show_progress) {
+    report_vars$n_total <- length(feature_ids)
+    report_vars$n_success <- length(valid_list)
+    report_vars$n_failed <- length(feature_ids) - length(valid_list)
+    report_vars$selection_df <- selection_df
+    report_vars$results_df <- results_df
+    report_vars$output <- output
+    report_vars$omnibus <- omnibus
+    report_vars$omnibus_test <- omnibus_test
+    report_vars$omnibus_threshold <- omnibus_threshold
+    
+    # Schedule report to print on exit (AFTER return, so it's the last thing shown)
+    on.exit({
+      print_final_report(report_vars)
+    }, add = TRUE)
+  }
+  
   output
+}
+
+# Helper function to print final report
+print_final_report <- function(vars) {
+  n_total <- vars$n_total
+  n_success <- vars$n_success
+  n_failed <- vars$n_failed
+  success_rate <- n_success / n_total * 100
+  selection_df <- vars$selection_df
+  results_df <- vars$results_df
+  output <- vars$output
+  omnibus <- vars$omnibus
+  omnibus_test <- vars$omnibus_test
+  omnibus_threshold <- vars$omnibus_threshold
+  
+  message("\n", strrep("=", 80))
+  message("fit_gamlss_models() - FINAL REPORT")
+  message(strrep("=", 80))
+  message("\nModel Fitting Summary:")
+  message("  Total features      : ", n_total)
+  message("  Successfully fitted : ", n_success, " (", sprintf("%.1f%%", success_rate), ")")
+  message("  Failed/skipped      : ", n_failed, " (", sprintf("%.1f%%", n_failed/n_total*100), ")")
+  
+  if (n_success > 0) {
+    # Family distribution
+    fam_table <- table(selection_df$best_family)
+    fam_sorted <- sort(fam_table, decreasing = TRUE)
+    
+    message("\nSelected Family Distribution:")
+    for (i in seq_along(fam_sorted)) {
+      fam_name <- names(fam_sorted)[i]
+      count <- as.numeric(fam_sorted[i])
+      pct <- count / sum(fam_sorted) * 100
+      message(sprintf("  %-10s : %5d (%.1f%%)", fam_name, count, pct))
+    }
+    
+    # Coefficient statistics
+    if (nrow(results_df) > 0) {
+      n_coefs <- nrow(results_df)
+      n_sig <- sum(results_df$padj < 0.05, na.rm = TRUE)
+      sig_rate <- if (n_coefs > 0) n_sig / n_coefs * 100 else 0
+      
+      message("\nCoefficient Results:")
+      message("  Total coefficients  : ", n_coefs)
+      message("  Significant (FDR<5%): ", n_sig, " (", sprintf("%.1f%%", sig_rate), ")")
+      
+      # Per-term breakdown
+      term_summary <- results_df %>%
+        dplyr::group_by(term) %>%
+        dplyr::summarize(
+          n_total = dplyr::n(),
+          n_sig = sum(padj < 0.05, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        dplyr::arrange(dplyr::desc(n_sig))
+      
+      if (nrow(term_summary) > 0) {
+        message("\n  Significant findings by term:")
+        for (i in seq_len(min(10, nrow(term_summary)))) {
+          term_name <- term_summary$term[i]
+          n_sig_term <- term_summary$n_sig[i]
+          n_total_term <- term_summary$n_total[i]
+          pct_sig <- n_sig_term / n_total_term * 100
+          message(sprintf("    %-25s : %5d / %5d (%.1f%%)", 
+                        term_name, n_sig_term, n_total_term, pct_sig))
+        }
+      }
+    }
+    
+    # Contrast statistics if available
+    if (!is.null(output$contrasts) && nrow(output$contrasts) > 0) {
+      n_contrasts <- nrow(output$contrasts)
+      n_sig_contrasts <- sum(output$contrasts$p_adj < 0.05, na.rm = TRUE)
+      
+      message("\nContrast Results:")
+      message("  Total contrasts     : ", n_contrasts)
+      message("  Significant (FDR<5%): ", n_sig_contrasts, " (", 
+              sprintf("%.1f%%", n_sig_contrasts/n_contrasts*100), ")")
+      
+      if (omnibus && !is.null(output$omnibus)) {
+        n_omnibus_pass <- sum(output$omnibus$pass, na.rm = TRUE)
+        n_omnibus_total <- nrow(output$omnibus)
+        message("\nOmnibus Test (", omnibus_test, "):")
+        message("  Features tested     : ", n_omnibus_total)
+        message("  Passed threshold    : ", n_omnibus_pass, " (", 
+                sprintf("%.1f%%", n_omnibus_pass/n_omnibus_total*100), ")")
+        message("  Threshold           : p < ", omnibus_threshold)
+      }
+    }
+  } else {
+    message("\n[WARNING] No features were successfully fitted.")
+  }
+  
+  message(strrep("=", 80), "\n")
 }

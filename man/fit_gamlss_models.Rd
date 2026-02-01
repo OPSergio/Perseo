@@ -7,13 +7,19 @@
 fit_gamlss_models(
   counts_matrix,
   design_matrix,
+  metadata = NULL,
   candidate_families,
   criterion = c("GAIC", "BIC", "AIC"),
   gaic_k = NULL,
   min_n = 5,
   contrast_matrix = NULL,
+  contrast_variable = NULL,
+  omnibus = FALSE,
+  omnibus_threshold = 0.05,
+  omnibus_test = c("Wald", "LRT"),
   p_adjust = "BH",
-  workers = 1,
+  workers = NULL,
+  parallel = FALSE,
   show_progress = TRUE,
   progress_label = "Fitting features",
   transform_mode = "strict"
@@ -23,7 +29,12 @@ fit_gamlss_models(
 \item{counts_matrix}{numeric matrix (features x samples).}
 
 \item{design_matrix}{data.frame or matrix of covariates with
-`nrow = ncol(counts_matrix)`.}
+`nrow = ncol(counts_matrix)`. Can also be a formula string (e.g., "~ condition + batch")
+in which case the design matrix is created internally from the metadata.}
+
+\item{metadata}{optional data.frame with sample metadata. Required when
+`design_matrix` is a formula string or when using `contrast_variable`.
+Must have `nrow = ncol(counts_matrix)`.}
 
 \item{candidate_families}{character vector of GAMLSS families to test
 (e.g. `c("PO","NBI","GA","GG","IG","LOGNO","NO","TF")`).}
@@ -39,13 +50,34 @@ common mask; features below this threshold are skipped. Default `5`.}
 \item{contrast_matrix}{optional numeric matrix where each row defines a linear
 combination of mu coefficients. Column names must match coefficient names
 from the design matrix. If provided, contrasts are computed from vcov after
-model fitting. Use limma-style contrast matrices.}
+model fitting.}
+
+\item{contrast_variable}{optional character string specifying a categorical variable
+name from the metadata for which all pairwise contrasts should be computed.
+If both `contrast_matrix` and `contrast_variable` are provided, `contrast_matrix`
+takes priority with a warning message.}
+
+\item{omnibus}{logical; if `TRUE` and contrasts are requested, performs a feature-level
+omnibus test first and only computes contrasts for features passing the test.
+This implements a hierarchical testing strategy (omnibus → post-hoc). Default `FALSE`.}
+
+\item{omnibus_threshold}{numeric; significance threshold for omnibus test. Features with
+omnibus p-value > this threshold will not have contrasts computed. Only used when
+`omnibus = TRUE`. Default `0.05`.}
+
+\item{omnibus_test}{character; type of omnibus test. Either `"Wald"` (multi-df Wald test,
+faster, uses existing vcov) or `"LRT"` (likelihood ratio test, more robust, requires
+refitting reduced model). Default `"Wald"`.}
 
 \item{p_adjust}{method passed to `p.adjust()` to compute FDR per term across
 features (default `"BH"`).}
 
-\item{workers}{integer number of parallel workers. If `> 1`, caller should
-configure `future::plan()` before calling. Default `1`.}
+\item{workers}{integer number of parallel workers. Only used when `parallel = TRUE`.
+If `NULL`, uses `future::availableCores() - 1`. Default `NULL`.}
+
+\item{parallel}{logical; enable parallel processing via `future::plan(multisession)`.
+When `TRUE`, automatically configures and cleans up the future backend.
+Default `FALSE`.}
 
 \item{show_progress}{logical; show a `progressr` progress bar. Default `TRUE`.}
 
@@ -63,9 +95,12 @@ A list with:
       stat, pval, padj.}
     \item{selection}{tibble with columns: feature, best_family,
       n_valid_obs, ic_value (Jacobian-corrected IC), transform_mode.}
+    \item{omnibus}{tibble with columns: feature, family, test_type, statistic,
+      df, p_value, pass. Only present when `omnibus = TRUE` and contrasts are requested.}
     \item{contrasts}{tibble with columns: feature, family, contrast,
       estimate, se, z, p_value, p_adj. Only present if
-      contrast_matrix is not NULL.}
+      contrast_matrix or contrast_variable is provided. When `omnibus = TRUE`,
+      only includes features passing the omnibus test.}
   }
 }
 \description{
@@ -79,32 +114,55 @@ Family comparison uses transformations (strict or safe), a common mask
 across families, and Jacobian correction so ICs are comparable on the original
 data scale. Coefficients/p-values are taken from `summary(., what = "mu")`.
 
-When `contrast_matrix` is provided, contrasts are computed using the variance-
-covariance matrix from the best-fitting model. If vcov extraction fails, contrasts
-will be NA for that feature.
+When contrasts are requested with `omnibus = TRUE`, the function performs hierarchical
+testing:
+\enumerate{
+  \item Fit full model per feature
+  \item Perform omnibus test for target factor (Wald or LRT)
+  \item Only compute pairwise contrasts for features passing omnibus test
+}
+
+This mirrors ANOVA + post-hoc workflow and reduces multiple testing burden.
+
+**Important**: The omnibus test serves only as a gatekeeper. Contrast p-values are
+adjusted exactly as before: `group_by(contrast)` across features. The omnibus p-value
+is NOT used in contrast adjustment.
+
+When `omnibus = FALSE` (default), behavior is identical to previous PERSEO versions.
+
+When `parallel = TRUE`, the function automatically sets up `future::plan(multisession)`
+with the specified number of workers and resets to sequential after completion.
 }
 \examples{
 \dontrun{
-# Basic usage
-fit <- fit_gamlss_models(
-  counts_matrix, design, c("NBI","GG","LOGNO"),
-  criterion = "BIC", min_n = 20,
-  workers = 4,
-  show_progress = TRUE,
-  transform_mode = "strict"
-)
-
-# With custom contrast matrix (limma-style)
-# For 3-level factor with columns: (Intercept), StatusB, StatusC
-C <- matrix(c(0, 1, -1), nrow = 1)  # B vs C
-colnames(C) <- c("(Intercept)", "StatusB", "StatusC")
-rownames(C) <- "B_vs_C"
-
+# Standard workflow (no omnibus filtering)
 fit <- fit_gamlss_models(
   counts_matrix, design, c("NBI","GG"),
-  contrast_matrix = C
+  metadata = meta,
+  contrast_variable = "tissue_type"
 )
-head(fit$contrasts)
+
+# With omnibus filtering (Wald test)
+fit <- fit_gamlss_models(
+  counts_matrix, design, c("NBI","GG"),
+  metadata = meta,
+  contrast_variable = "tissue_type",
+  omnibus = TRUE,
+  omnibus_threshold = 0.05,
+  omnibus_test = "Wald"
+)
+
+# View omnibus results
+head(fit$omnibus)
+
+# With omnibus filtering (LRT)
+fit_lrt <- fit_gamlss_models(
+  counts_matrix, design, c("NBI","GG"),
+  metadata = meta,
+  contrast_variable = "tissue_type",
+  omnibus = TRUE,
+  omnibus_test = "LRT"
+)
 }
 }
 \seealso{

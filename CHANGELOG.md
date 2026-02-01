@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Hierarchical omnibus testing**: `fit_gamlss_models()` and `run_perseo()` now support omnibus tests
+  - New parameters: `omnibus`, `omnibus_test`, `omnibus_threshold`
+  - Two test types: Wald (fast, vcov-based) and LRT (robust, model refitting)
+  - Omnibus test acts as gatekeeper before computing pairwise contrasts
+  - Reduces multiple testing burden for multi-level factors (3+ groups)
+  - Returns `omnibus` table with test statistics, p-values, and pass/fail indicators
+  - Mirrors ANOVA + post-hoc workflow familiar to statisticians
+- **Automatic contrast generation**: `fit_gamlss_models()` accepts `contrast_variable` parameter
+  - Auto-generates all pairwise contrasts for a categorical variable
+  - Requires `metadata` parameter to identify factor levels
+  - Simplifies workflow: no manual contrast matrix construction needed
+  - Example: `contrast_variable = "tissue_type"` creates all tissue comparisons automatically
+- **Formula-based design specification**: `fit_gamlss_models()` now accepts formula strings
+  - Alternative to manual `model.matrix()` construction
+  - Example: `design_matrix = "~ tissue_type + age + batch"`
+  - Requires `metadata` parameter for variable resolution
+  - Automatically handles factor encoding and reference levels
+- **Built-in parallelization**: Automatic parallel processing configuration
+  - New parameters: `parallel` and `workers` in all main functions
+  - No manual `future::plan()` setup required
+  - Automatic cleanup: resets to sequential plan after completion
+  - Memory-efficient: optimal worker allocation based on system resources
+- **Enhanced reporting system**: Improved user feedback and progress visibility
+  - New S3 print method for `perseo_fit` objects (from `fit_gamlss_models()`)
+  - Comprehensive summary reports with family distributions, significance rates, omnibus results
+  - Automatic report generation when `show_progress = TRUE`
+  - Report prints AFTER function return to avoid terminal clutter
+  - Detailed startup banners in `find_families()` and `fit_gamlss_models()`
 - **Optional bootstrap mode**: `find_families()` and `run_perseo()` now accept `bootstrap` parameter
   - `bootstrap = TRUE` (default): Fast bootstrap sampling of features
   - `bootstrap = FALSE`: Full evaluation of all families on ALL features (comprehensive but slower)

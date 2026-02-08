@@ -22,9 +22,15 @@ compare_families_on_feature <- function(feature_vec,
                                         gaic_k = NULL,
                                         min_n = 5,
                                         bd_vec = NULL,
-                                        transform_mode = "strict") {
+                                        transform_mode = "strict",
+                                        extract_coef_fn = NULL) {
   y <- feature_vec
   candidate_families <- families
+  
+  # Use default extractor if not provided
+  if (is.null(extract_coef_fn)) {
+    extract_coef_fn <- extract_mu_coefficients
+  }
   
   # Transform with all candidate families
   transforms <- stats::setNames(

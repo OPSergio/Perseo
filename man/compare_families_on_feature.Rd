@@ -11,7 +11,8 @@ compare_families_on_feature(
   gaic_k = NULL,
   min_n = 5,
   bd_vec = NULL,
-  transform_mode = "strict"
+  transform_mode = "strict",
+  extract_coef_fn = NULL
 )
 }
 \arguments{

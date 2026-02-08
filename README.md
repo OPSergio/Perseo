@@ -13,7 +13,7 @@
     <img src="https://img.shields.io/badge/tidyverse-compatible-brightgreen?style=flat&logo=tidyverse" alt="tidyverse">
   </a>
   <a href="https://github.com/OPSergio/Perseo">
-    <img src="https://img.shields.io/badge/version-0.0.1-orange?style=flat&logo=GitHub" alt="version">
+    <img src="https://img.shields.io/badge/version-1.0.0-orange?style=flat&logo=GitHub" alt="version">
   </a>
 </div>
 

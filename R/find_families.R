@@ -190,6 +190,9 @@ find_families <- function(counts_matrix,
   
   n_samples <- ncol(counts_matrix)
   
+  # ---- Capture internal functions for parallel workers ----
+  .extract_mu_coefficients <- extract_mu_coefficients
+  
   # ---- Per-feature evaluation worker ----
   evaluate_feature <- function(feature_id) {
     y <- as.numeric(counts_matrix[feature_id, ])
@@ -244,7 +247,8 @@ find_families <- function(counts_matrix,
       criterion = criterion,
       gaic_k = gaic_k,
       bd_vec = filtered$bd_vec,
-      transform_mode = transform_mode
+      transform_mode = transform_mode,
+      extract_coef_fn = .extract_mu_coefficients
     )
     
     list(

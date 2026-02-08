@@ -2,7 +2,7 @@
 % Please edit documentation in R/gamlss_fitting.R
 \name{fit_gamlss_safely}
 \alias{fit_gamlss_safely}
-\title{Fit a GAMLSS model while suppressing console output}
+\title{Fit a GAMLSS model while suppressing ALL console output}
 \usage{
 fit_gamlss_safely(formula, data, family_obj)
 }
@@ -17,7 +17,9 @@ fit_gamlss_safely(formula, data, family_obj)
 A fitted `gamlss` object or NULL if fitting fails.
 }
 \description{
-Wraps `gamlss::gamlss()` to suppress printed messages and warnings, returning
-NULL on error for safe iteration over multiple families/features.
+Wraps `gamlss::gamlss()` to completely suppress all printed output (messages,
+warnings, and cat() calls). Uses capture.output() to catch any remaining
+output that suppressWarnings/Messages don't catch. Returns NULL on error for
+safe iteration over multiple families/features.
 }
 \keyword{internal}

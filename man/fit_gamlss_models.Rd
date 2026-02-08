@@ -26,145 +26,312 @@ fit_gamlss_models(
 )
 }
 \arguments{
-\item{counts_matrix}{numeric matrix (features x samples).}
+\item{counts_matrix}{Numeric matrix (features × samples). Feature IDs in row names, 
+sample IDs in column names.}
 
-\item{design_matrix}{data.frame or matrix of covariates with
-`nrow = ncol(counts_matrix)`. Can also be a formula string (e.g., "~ condition + batch")
-in which case the design matrix is created internally from the metadata.}
+\item{design_matrix}{Either:
+\itemize{
+  \item A formula string (e.g., \code{"~ condition + batch"}) - requires \code{metadata}
+  \item A formula object - requires \code{metadata}
+  \item A pre-built model matrix from \code{model.matrix()} with nrow = ncol(counts_matrix)
+}}
 
-\item{metadata}{optional data.frame with sample metadata. Required when
-`design_matrix` is a formula string or when using `contrast_variable`.
-Must have `nrow = ncol(counts_matrix)`.}
+\item{metadata}{Data.frame with sample metadata. Required when:
+\itemize{
+  \item \code{design_matrix} is a formula (string or object), OR
+  \item Using \code{contrast_variable} for automatic contrast generation
+}
+Must have \code{nrow = ncol(counts_matrix)}. Row names should match column 
+names of counts_matrix for proper alignment.}
 
-\item{candidate_families}{character vector of GAMLSS families to test
-(e.g. `c("PO","NBI","GA","GG","IG","LOGNO","NO","TF")`).}
+\item{candidate_families}{Character vector of GAMLSS families to test
+(e.g., \code{c("PO","NBI","GA","GG","IG","LOGNO","NO","TF")}).}
 
-\item{criterion}{one of `"GAIC"`, `"BIC"`, or `"AIC"`; default `"GAIC"`.}
+\item{criterion}{Model selection criterion: \code{"GAIC"}, \code{"BIC"}, or 
+\code{"AIC"}. Default \code{"GAIC"}.}
 
-\item{gaic_k}{numeric penalty used when `criterion = "GAIC"`. If `NULL`,
-uses `log(n_valid_obs)`.}
+\item{gaic_k}{Numeric penalty for GAIC. If \code{NULL}, uses \code{log(n_valid_obs)} 
+(equivalent to BIC). Ignored if \code{criterion != "GAIC"}.}
 
-\item{min_n}{integer minimum number of valid observations after applying the
-common mask; features below this threshold are skipped. Default `5`.}
+\item{min_n}{Integer minimum number of valid observations after common mask. 
+Features below this threshold are skipped. Default \code{5}.}
 
-\item{contrast_matrix}{optional numeric matrix where each row defines a linear
-combination of mu coefficients. Column names must match coefficient names
-from the design matrix. If provided, contrasts are computed from vcov after
-model fitting.}
+\item{contrast_matrix}{Numeric matrix where each row defines a linear combination 
+of mu coefficients. Column names must match coefficient names from design matrix. 
+Use this for custom contrasts with pre-built design matrices (Workflow B). 
+Mutually exclusive with \code{contrast_variable}.}
 
-\item{contrast_variable}{optional character string specifying a categorical variable
-name from the metadata for which all pairwise contrasts should be computed.
-If both `contrast_matrix` and `contrast_variable` are provided, `contrast_matrix`
-takes priority with a warning message.}
+\item{contrast_variable}{Character string naming a categorical variable in 
+\code{metadata} for automatic pairwise contrast generation. Only valid with 
+formula-based design (Workflow A). Requires \code{metadata}. Mutually 
+exclusive with \code{contrast_matrix}.}
 
-\item{omnibus}{logical; if `TRUE` and contrasts are requested, performs a feature-level
-omnibus test first and only computes contrasts for features passing the test.
-This implements a hierarchical testing strategy (omnibus → post-hoc). Default `FALSE`.}
+\item{omnibus}{Logical; if \code{TRUE} and contrasts are requested, performs a 
+feature-level omnibus test before computing contrasts. Only features passing 
+the omnibus test (p < \code{omnibus_threshold}) will have contrasts computed. 
+This implements hierarchical testing (omnibus → post-hoc). Default \code{FALSE}.}
 
-\item{omnibus_threshold}{numeric; significance threshold for omnibus test. Features with
-omnibus p-value > this threshold will not have contrasts computed. Only used when
-`omnibus = TRUE`. Default `0.05`.}
+\item{omnibus_threshold}{Numeric; significance threshold for omnibus test. 
+Default \code{0.05}.}
 
-\item{omnibus_test}{character; type of omnibus test. Either `"Wald"` (multi-df Wald test,
-faster, uses existing vcov) or `"LRT"` (likelihood ratio test, more robust, requires
-refitting reduced model). Default `"Wald"`.}
+\item{omnibus_test}{Character; type of omnibus test: \code{"Wald"} (fast, uses 
+vcov from fitted model) or \code{"LRT"} (robust, refits reduced model). 
+Default \code{"Wald"}.}
 
-\item{p_adjust}{method passed to `p.adjust()` to compute FDR per term across
-features (default `"BH"`).}
+\item{p_adjust}{Method passed to \code{p.adjust()} to compute FDR per term 
+across features. Default \code{"BH"}.}
 
-\item{workers}{integer number of parallel workers. Only used when `parallel = TRUE`.
-If `NULL`, uses `future::availableCores() - 1`. Default `NULL`.}
+\item{workers}{Integer number of parallel workers. Only used when 
+\code{parallel = TRUE}. If \code{NULL}, uses \code{future::availableCores() - 1}. 
+Default \code{NULL}.}
 
-\item{parallel}{logical; enable parallel processing via `future::plan(multisession)`.
-When `TRUE`, automatically configures and cleans up the future backend.
-Default `FALSE`.}
+\item{parallel}{Logical; enable parallel processing via \code{future::plan(multisession)}. 
+When \code{TRUE}, automatically configures and cleans up the future backend. 
+Default \code{FALSE}.}
 
-\item{show_progress}{logical; show a `progressr` progress bar. Default `TRUE`.}
+\item{show_progress}{Logical; show progress messages and final report. 
+Default \code{TRUE}.}
 
-\item{progress_label}{character label shown next to the progress bar.}
+\item{progress_label}{Character label for progress bar.}
 
-\item{transform_mode}{character: "strict" (default) or "safe". Transformation mode
-for family comparison. "strict" enforces domain-preserving transformations with
-observation exclusion. "safe" applies global affine transformations to fit data
-into family domain (invertible with Jacobian correction).}
+\item{transform_mode}{Character: \code{"strict"} (default) or \code{"safe"}. 
+Transformation mode for family comparison. See Details.}
 }
 \value{
 A list with:
   \describe{
-    \item{results}{tibble with columns: feature, term, effect, se,
-      stat, pval, padj.}
-    \item{selection}{tibble with columns: feature, best_family,
-      n_valid_obs, ic_value (Jacobian-corrected IC), transform_mode.}
-    \item{omnibus}{tibble with columns: feature, family, test_type, statistic,
-      df, p_value, pass. Only present when `omnibus = TRUE` and contrasts are requested.}
-    \item{contrasts}{tibble with columns: feature, family, contrast,
-      estimate, se, z, p_value, p_adj. Only present if
-      contrast_matrix or contrast_variable is provided. When `omnibus = TRUE`,
-      only includes features passing the omnibus test.}
+    \item{results}{Tibble with one row per feature × coefficient. Columns: feature, 
+      term, effect, se, stat, pval, padj. FDR adjustment (padj) is performed 
+      \strong{by term} across all features.}
+    \item{selection}{Tibble with one row per feature. Columns: feature, best_family, 
+      n_valid_obs, ic_value (Jacobian-corrected), transform_mode.}
+    \item{omnibus}{(Optional) Tibble with omnibus test results. Only present when 
+      \code{omnibus = TRUE} and contrasts are requested. Columns: feature, family, 
+      test_type, statistic, df, p_value, pass.}
+    \item{contrasts}{(Optional) Tibble with contrast results. Only present if 
+      \code{contrast_matrix} or \code{contrast_variable} is provided. Columns: 
+      feature, family, contrast, estimate, se, z, p_value, p_adj. FDR adjustment 
+      (p_adj) is performed \strong{by contrast} across features. When 
+      \code{omnibus = TRUE}, only includes features where \code{omnibus$pass == TRUE}.}
   }
 }
 \description{
 Compares candidate GAMLSS families per feature on the same set of observations
-(common mask), using family-specific transformations and Jacobian
-correction for fair IC comparison. Selects the best family by GAIC/BIC/AIC and
-returns per-term statistics from `summary(fit, what = "mu")`.
+(common mask), using family-specific transformations and Jacobian correction 
+for fair IC comparison. Selects the best family by GAIC/BIC/AIC and returns 
+per-term statistics from `summary(fit, what = "mu")`.
 }
 \details{
-Family comparison uses transformations (strict or safe), a common mask
-across families, and Jacobian correction so ICs are comparable on the original
-data scale. Coefficients/p-values are taken from `summary(., what = "mu")`.
-
-When contrasts are requested with `omnibus = TRUE`, the function performs hierarchical
-testing:
-\enumerate{
-  \item Fit full model per feature
-  \item Perform omnibus test for target factor (Wald or LRT)
-  \item Only compute pairwise contrasts for features passing omnibus test
+\subsection{Model Selection Strategy}{
+  For each feature, PERSEO fits all candidate families on the \strong{same 
+  observations} (common mask) using family-specific transformations and Jacobian 
+  correction. This ensures information criteria (BIC/AIC/GAIC) are comparable 
+  across families on the original data scale. The best family is selected per 
+  feature, and coefficient statistics are extracted from \code{summary(fit, what = "mu")}.
 }
 
-This mirrors ANOVA + post-hoc workflow and reduces multiple testing burden.
-
-**Important**: The omnibus test serves only as a gatekeeper. Contrast p-values are
-adjusted exactly as before: `group_by(contrast)` across features. The omnibus p-value
-is NOT used in contrast adjustment.
-
-When `omnibus = FALSE` (default), behavior is identical to previous PERSEO versions.
-
-When `parallel = TRUE`, the function automatically sets up `future::plan(multisession)`
-with the specified number of workers and resets to sequential after completion.
+\subsection{Transformation Modes}{
+  \describe{
+    \item{\strong{strict}}{(Default) Domain-preserving transformations. Invalid 
+      observations are excluded via masking. Conservative approach that respects 
+      theoretical support constraints.}
+    \item{\strong{safe}}{Global affine transformations (y* = a·y + b) that are 
+      invertible with Jacobian correction. No observation exclusion. Useful for 
+      exploratory analysis across support boundaries.}
+  }
 }
+
+\subsection{Hierarchical Testing (Omnibus + Contrasts)}{
+  When \code{omnibus = TRUE} and contrasts are requested, the function implements 
+  a two-stage hierarchical testing strategy:
+  \enumerate{
+    \item \strong{Omnibus Test}: For each feature, test whether the target factor 
+      has \emph{any} effect (multi-df test).
+    \item \strong{Contrasts}: Only for features passing the omnibus test 
+      (p < \code{omnibus_threshold}), compute pairwise contrasts.
+  }
+  
+  This mirrors the ANOVA + post-hoc workflow and reduces the multiple testing 
+  burden, increasing power to detect specific pairwise differences.
+  
+  \strong{Important}: The omnibus test acts only as a gatekeeper. Contrast p-values 
+  are still adjusted \strong{by contrast} across features using the standard 
+  FDR procedure (\code{group_by(contrast) |> mutate(p_adj = p.adjust(p_value))}). 
+  The omnibus p-value is NOT incorporated into contrast adjustment.
+  
+  When \code{omnibus = FALSE} (default), all features receive contrast computations 
+  without filtering.
+}
+
+\subsection{Omnibus Test Options}{
+  \describe{
+    \item{\strong{Wald}}{(Default) Fast multi-df Wald test using variance-covariance 
+      matrix: W = β'V⁻¹β ~ χ²(df). No model refitting required. Best for large 
+      samples (n > 30/group) and standard families.}
+    \item{\strong{LRT}}{Likelihood ratio test requiring reduced model refit: 
+      LRT = 2(logLik_full - logLik_reduced) ~ χ²(df). More robust, especially 
+      for small samples (n < 30/group) or complex families. Approximately 2× 
+      slower than Wald.}
+  }
+}
+
+\subsection{Parallel Processing}{
+  When \code{parallel = TRUE}, the function automatically configures 
+  \code{future::plan(multisession)} with the specified number of workers and 
+  resets to sequential plan upon completion. No manual setup required.
+}
+}
+\section{Input Workflows}{
+
+
+\strong{Workflow A: Formula + Metadata + Automatic Contrasts}
+
+When you want PERSEO to build the design matrix and automatically generate 
+pairwise contrasts:
+
+\preformatted{
+fit_gamlss_models(
+  counts_matrix = counts,
+  design_matrix = "~ condition + batch",  # formula string
+  metadata = metadata,                     # REQUIRED
+  candidate_families = c("NBI", "GG"),
+  contrast_variable = "condition"          # auto-generate contrasts
+)
+}
+
+\strong{Requirements:}
+\itemize{
+  \item \code{design_matrix} MUST be a formula (string or formula object)
+  \item \code{metadata} MUST be provided (data.frame with nrow = ncol(counts_matrix))
+  \item \code{contrast_variable} names a column in metadata
+  \item Row names of metadata should match column names of counts_matrix
+}
+
+\strong{Workflow B: Design Matrix + Manual Contrasts}
+
+When you have a pre-built design matrix and want explicit control over contrasts:
+
+\preformatted{
+design <- model.matrix(~ condition + batch, data = metadata)
+C <- matrix(...)  # Custom contrast matrix
+colnames(C) <- colnames(design)
+
+fit_gamlss_models(
+  counts_matrix = counts,
+  design_matrix = design,        # pre-built matrix
+  candidate_families = c("NBI", "GG"),
+  contrast_matrix = C             # REQUIRED for contrasts
+)
+}
+
+\strong{Requirements:}
+\itemize{
+  \item \code{design_matrix} is a numeric matrix (nrow = ncol(counts_matrix))
+  \item If contrasts are needed, \code{contrast_matrix} MUST be provided
+  \item \code{contrast_variable} is NOT allowed (automatic generation not supported)
+  \item Column names of contrast_matrix must match coefficient names
+}
+
+\strong{Invalid Combinations:}
+\itemize{
+  \item design_matrix = matrix + contrast_variable (without metadata)
+  \item Automatic contrast generation requires formula + metadata
+}
+}
+
 \examples{
 \dontrun{
-# Standard workflow (no omnibus filtering)
-fit <- fit_gamlss_models(
-  counts_matrix, design, c("NBI","GG"),
-  metadata = meta,
-  contrast_variable = "tissue_type"
+# ============================================================================
+# Workflow A: Formula + Metadata + Automatic Contrasts
+# ============================================================================
+
+# Prepare data
+metadata <- data.frame(
+  sample_id = colnames(counts_matrix),
+  tissue_type = factor(c(rep("Normal", 50), rep("Tumor", 50))),
+  age = rnorm(100, 60, 10),
+  batch = factor(rep(1:4, each = 25))
 )
 
-# With omnibus filtering (Wald test)
-fit <- fit_gamlss_models(
-  counts_matrix, design, c("NBI","GG"),
-  metadata = meta,
+# Simple: formula + auto-contrasts
+fit_auto <- fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = "~ tissue_type + age + batch",  # formula string
+  metadata = metadata,                             # REQUIRED
+  candidate_families = c("NBI", "GG", "LOGNO"),
+  contrast_variable = "tissue_type",               # auto-generate all pairwise
+  criterion = "BIC",
+  parallel = TRUE,
+  workers = 4
+)
+
+# View results
+head(fit_auto$results)    # Coefficient statistics
+head(fit_auto$selection)  # Best family per feature
+head(fit_auto$contrasts)  # Pairwise contrasts (auto-generated)
+
+# ============================================================================
+# Workflow B: Design Matrix + Manual Contrasts
+# ============================================================================
+
+# Build design matrix manually
+metadata$tissue_type <- relevel(metadata$tissue_type, ref = "Normal")
+design <- model.matrix(~ tissue_type + age + batch, data = metadata)
+
+# Define custom contrast matrix
+C <- matrix(0, nrow = 1, ncol = ncol(design))
+colnames(C) <- colnames(design)
+rownames(C) <- "Tumor_vs_Normal"
+C["Tumor_vs_Normal", "tissue_typeTumor"] <- 1
+
+# Fit with explicit contrast matrix
+fit_manual <- fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = design,                          # pre-built matrix
+  candidate_families = c("NBI", "GG", "LOGNO"),
+  contrast_matrix = C,                             # explicit contrasts
+  criterion = "BIC",
+  parallel = TRUE,
+  workers = 4
+)
+
+head(fit_manual$contrasts)
+
+# ============================================================================
+# Hierarchical Testing: Omnibus + Contrasts
+# ============================================================================
+
+# For multi-level factors (3+ levels), use omnibus filtering
+metadata_multi <- metadata
+metadata_multi$tissue_type <- factor(
+  rep(c("Normal", "Luminal", "Basal"), length.out = 100)
+)
+
+fit_hierarchical <- fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = "~ tissue_type + age + batch",
+  metadata = metadata_multi,
+  candidate_families = c("NBI", "GG"),
   contrast_variable = "tissue_type",
-  omnibus = TRUE,
-  omnibus_threshold = 0.05,
-  omnibus_test = "Wald"
+  omnibus = TRUE,                 # Enable hierarchical testing
+  omnibus_threshold = 0.05,       # Filter threshold
+  omnibus_test = "Wald",          # "Wald" or "LRT"
+  criterion = "BIC",
+  parallel = TRUE,
+  workers = 4
 )
 
 # View omnibus results
-head(fit$omnibus)
+head(fit_hierarchical$omnibus)
 
-# With omnibus filtering (LRT)
-fit_lrt <- fit_gamlss_models(
-  counts_matrix, design, c("NBI","GG"),
-  metadata = meta,
-  contrast_variable = "tissue_type",
-  omnibus = TRUE,
-  omnibus_test = "LRT"
-)
+# Contrasts only computed for features where omnibus$pass == TRUE
+head(fit_hierarchical$contrasts)
+
+# Count features passing omnibus filter
+sum(fit_hierarchical$omnibus$pass, na.rm = TRUE)
 }
 }
 \seealso{
-find_families, transform_response
+\code{\link{find_families}}, \code{\link{transform_response}}, 
+  \code{\link{run_perseo}}
 }

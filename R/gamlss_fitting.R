@@ -56,10 +56,12 @@ instantiate_gamlss_family <- function(family_name, bd_vec = NULL) {
 }
 
 
-#' Fit a GAMLSS model while suppressing console output
+#' Fit a GAMLSS model while suppressing ALL console output
 #'
-#' Wraps `gamlss::gamlss()` to suppress printed messages and warnings, returning
-#' NULL on error for safe iteration over multiple families/features.
+#' Wraps `gamlss::gamlss()` to completely suppress all printed output (messages,
+#' warnings, and cat() calls). Uses capture.output() to catch any remaining
+#' output that suppressWarnings/Messages don't catch. Returns NULL on error for
+#' safe iteration over multiple families/features.
 #'
 #' @param formula Model formula passed to `gamlss()`.
 #' @param data Data frame containing the response and covariates.
@@ -72,19 +74,20 @@ fit_gamlss_safely <- function(formula, data, family_obj) {
     # Store family_obj BEFORE calling gamlss so it's in scope
     family_obj_stored <- family_obj
     
-    # Fit with trace=FALSE to suppress convergence messages
-    # Note: gamlss may still print summary via print method in some contexts
-    # but this is safe for parallel execution (no sinks/file handles)
-    fit_result <- suppressWarnings(suppressMessages(
-      gamlss::gamlss(
-        formula = formula,
-        data = data,
-        family = family_obj,
-        trace = FALSE,
-        control = gamlss::gamlss.control(trace = FALSE, c.crit = 0.001),
-        i.control = gamlss::glim.control(trace = FALSE)
-      )
-    ))
+    # Suppress all GAMLSS output using capture.output
+    fit_result <- NULL
+    dummy <- capture.output({
+      fit_result <- suppressWarnings(suppressMessages(
+        gamlss::gamlss(
+          formula = formula,
+          data = data,
+          family = family_obj,
+          trace = FALSE,
+          control = gamlss::gamlss.control(trace = FALSE, c.crit = 0.001),
+          i.control = gamlss::glim.control(trace = FALSE)
+        )
+      ))
+    })
     
     # Store family_obj in fit for vcov() to find it
     if (!is.null(fit_result)) {
@@ -149,11 +152,14 @@ compute_jacobian_corrected_ic <- function(fit, penalty, logJ_sum) {
 #' @return Tibble with columns: term, effect, se, stat, pval.
 #' @keywords internal
 extract_mu_coefficients <- function(fit) {
-  # Get summary output while suppressing messages
-  # Note: summary() may still print in some contexts, but this is safe for parallel
-  summary_obj <- suppressWarnings(suppressMessages({
-    summary(fit, what = "mu")
-  }))
+  # Get summary output while suppressing output
+  summary_obj <- NULL
+  
+  dummy <- capture.output({
+    summary_obj <- suppressWarnings(suppressMessages({
+      summary(fit, what = "mu")
+    }))
+  })
 
   # Helper to coerce various table structures
   coerce_summary_table <- function(tab) {
@@ -187,6 +193,16 @@ extract_mu_coefficients <- function(fit) {
         term_names <- names(coef(fit, what = "mu"))
       }
     }
+    
+    # Clean up term names: remove leading X. and fix mangled intercepts
+    # Pattern examples: "X.Intercept.", "X.Intercept..1", "X.Intercept..2"
+    # Should all become "(Intercept)"
+    term_names <- gsub("^X\\.", "", term_names)  # Remove "X." prefix
+    term_names <- gsub("\\.+$", "", term_names)  # Remove trailing dots
+    term_names <- gsub("\\.\\d+$", "", term_names)  # Remove .1, .2, etc at end
+    term_names <- gsub("\\.+", ".", term_names)  # Collapse multiple dots to single dot
+    term_names <- gsub("^\\.|\\.$", "", term_names)  # Remove leading/trailing dots again
+    term_names <- ifelse(grepl("^Intercept", term_names, ignore.case = TRUE), "(Intercept)", term_names)
     
     tibble::tibble(
       term = term_names,

@@ -4,14 +4,14 @@
 \alias{summarize_family_frequencies}
 \title{Summarize family selection frequencies across bootstrap pulls}
 \usage{
-summarize_family_frequencies(sampled_results, top_n, verbose = FALSE)
+summarize_family_frequencies(sampled_results, top_n, show_progress = FALSE)
 }
 \arguments{
 \item{sampled_results}{Tibble with bootstrap results (from `bind_bootstrap_results()`).}
 
 \item{top_n}{Integer number of top families to return.}
 
-\item{verbose}{Logical; print summary report if TRUE.}
+\item{show_progress}{Logical; print summary report if TRUE.}
 }
 \value{
 List with frequency tables, proportions, and top families.

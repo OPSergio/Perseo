@@ -18,7 +18,7 @@
 #'   Ignored if bootstrap = FALSE.
 #' @param top_n integer, number of top families to return (default: 4)
 #' @param families character vector of families to consider; if NULL, a default set is used
-#' @param verbose logical, print progress (default: TRUE)
+#' @param show_progress logical, show progress messages and reports (default: TRUE)
 #' @param min_n integer, min valid samples per feature after common mask (default: 5)
 #' @param seed integer or NULL, seed for reproducibility (default: NULL)
 #' @param group_by_support logical; if TRUE (default), restricts candidate families
@@ -47,7 +47,7 @@
 #' @param parallel logical; enable parallel processing via `future::plan(multisession)`.
 #'   When `TRUE`, automatically configures and cleans up the future backend.
 #'   Default `FALSE`.
-#' @param verbose logical; print progress messages (default TRUE).
+#' @param show_progress logical; show progress messages and reports (default TRUE).
 #'
 #' @return A list with:
 #'   \describe{
@@ -122,7 +122,7 @@ find_families <- function(counts_matrix,
                          transform_mode = "strict",
                          workers = NULL,
                          parallel = FALSE,
-                         verbose = TRUE) {
+                         show_progress = TRUE) {
   criterion <- match.arg(criterion)
   
   # ---- Set up parallel backend if requested ----
@@ -150,7 +150,7 @@ find_families <- function(counts_matrix,
     # Set up multisession plan
     future::plan(future::multisession, workers = n_workers)
     
-    if (verbose) {
+    if (show_progress) {
       message("Parallel processing enabled with ", n_workers, " workers")
     }
   }
@@ -257,27 +257,50 @@ find_families <- function(counts_matrix,
   }
   
   # ---- Evaluation execution ----
+  has_cli <- requireNamespace("cli", quietly = TRUE)
+  
   if (bootstrap) {
     # Bootstrap sampling mode
-    if (isTRUE(verbose)) {
-      message("\n", strrep("=", 80))
-      message("find_families() - STARTING")
-      message(strrep("=", 80))
-      message("Mode              : Bootstrap sampling")
-      message("Bootstrap pulls   : ", n_boot)
-      message("Features/pull     : ", n_genes)
-      message("Total evaluations : ", n_boot * n_genes)
-      message("Candidate families: ", paste(families, collapse = ", "))
-      message("Transform mode    : ", transform_mode)
-      if (parallel) {
-        message("Parallel workers  : ", n_workers)
+    if (isTRUE(show_progress)) {
+      if (has_cli) {
+        cli::cli_rule("find_families() - STARTING")
+        cli::cli_alert_info("Mode              : {.val Bootstrap sampling}")
+        cli::cli_alert_info("Bootstrap pulls   : {.val {n_boot}}")
+        cli::cli_alert_info("Features/pull     : {.val {n_genes}}")
+        cli::cli_alert_info("Total evaluations : {.val {n_boot * n_genes}}")
+        cli::cli_alert_info("Candidate families: {.val {paste(families, collapse = ', ')}}")
+        cli::cli_alert_info("Transform mode    : {.val {transform_mode}}")
+        if (parallel) {
+          cli::cli_alert_info("Parallel workers  : {.val {n_workers}}")
+        }
+        cli::cli_rule()
+      } else {
+        message("\n", strrep("=", 80))
+        message("find_families() - STARTING")
+        message(strrep("=", 80))
+        message("Mode              : Bootstrap sampling")
+        message("Bootstrap pulls   : ", n_boot)
+        message("Features/pull     : ", n_genes)
+        message("Total evaluations : ", n_boot * n_genes)
+        message("Candidate families: ", paste(families, collapse = ", "))
+        message("Transform mode    : ", transform_mode)
+        if (parallel) {
+          message("Parallel workers  : ", n_workers)
+        }
+        message(strrep("=", 80), "\n")
       }
-      message(strrep("=", 80), "\n")
     }
     
     results_list <- lapply(seq_len(n_boot), function(b) {
-      if (isTRUE(verbose)) {
-        message("[", format(Sys.time(), "%H:%M:%S"), "] Bootstrap pull ", b, "/", n_boot, " - sampling ", n_genes, " features...")
+      if (isTRUE(show_progress)) {
+        if (has_cli) {
+          cli::cli_progress_step(
+            "Bootstrap pull {b}/{n_boot}",
+            msg_done = "Bootstrap pull {b}/{n_boot} completed"
+          )
+        } else {
+          message("[", format(Sys.time(), "%H:%M:%S"), "] Bootstrap pull ", b, "/", n_boot, " - sampling ", n_genes, " features...")
+        }
       }
       pull_ids <- sample(feature_ids_all, n_genes, replace = FALSE)
       future.apply::future_lapply(
@@ -289,18 +312,30 @@ find_families <- function(counts_matrix,
     })
   } else {
     # Full evaluation mode (all features, no bootstrap)
-    if (isTRUE(verbose)) {
-      message("\n", strrep("=", 80))
-      message("find_families() - STARTING")
-      message(strrep("=", 80))
-      message("Mode              : Full evaluation (no bootstrap)")
-      message("Total features    : ", length(feature_ids_all))
-      message("Candidate families: ", paste(families, collapse = ", "))
-      message("Transform mode    : ", transform_mode)
-      if (parallel) {
-        message("Parallel workers  : ", n_workers)
+    if (isTRUE(show_progress)) {
+      if (has_cli) {
+        cli::cli_rule("find_families() - STARTING")
+        cli::cli_alert_info("Mode              : {.val Full evaluation (no bootstrap)}")
+        cli::cli_alert_info("Total features    : {.val {length(feature_ids_all)}}")
+        cli::cli_alert_info("Candidate families: {.val {paste(families, collapse = ', ')}}")
+        cli::cli_alert_info("Transform mode    : {.val {transform_mode}}")
+        if (parallel) {
+          cli::cli_alert_info("Parallel workers  : {.val {n_workers}}")
+        }
+        cli::cli_rule()
+      } else {
+        message("\n", strrep("=", 80))
+        message("find_families() - STARTING")
+        message(strrep("=", 80))
+        message("Mode              : Full evaluation (no bootstrap)")
+        message("Total features    : ", length(feature_ids_all))
+        message("Candidate families: ", paste(families, collapse = ", "))
+        message("Transform mode    : ", transform_mode)
+        if (parallel) {
+          message("Parallel workers  : ", n_workers)
+        }
+        message(strrep("=", 80), "\n")
       }
-      message(strrep("=", 80), "\n")
     }
     
     results_list <- list(
@@ -315,7 +350,7 @@ find_families <- function(counts_matrix,
   
   # ---- Aggregate results ----
   sampled_results <- bind_bootstrap_results(results_list)
-  summary_info <- summarize_family_frequencies(sampled_results, top_n, verbose)
+  summary_info <- summarize_family_frequencies(sampled_results, top_n, show_progress)
   
   # Append sampled results and metadata to summary
   summary_info$sampled_results <- sampled_results

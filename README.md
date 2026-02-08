@@ -17,10 +17,9 @@
   </a>
 </div>
 
-
 ---
 
-Automated model selection and differential expression analysis for omics data using **GAMLSS** (Generalized Additive Models for Location, Scale and Shape). It supports overdispersed, skewed, or otherwise non-standard distributions, allowing for better model fit and more accurate inference.
+**PERSEO** Automated model selection and differential expression analysis for omics data using **GAMLSS** (Generalized Additive Models for Location, Scale and Shape). It supports overdispersed, skewed, or otherwise non-standard distributions, allowing for better model fit and more accurate inference.
 
 ---
 
@@ -28,33 +27,45 @@ Automated model selection and differential expression analysis for omics data us
 
 - [Why PERSEO?](#why-perseo)
 - [Installation](#installation)
-- [Data Requirements](#data-requirements)
+- [Core Concepts](#core-concepts)
 - [Quick Start](#quick-start)
-- [Function Reference](#function-reference)
-  - [run_perseo() - High-Level Orchestration](#run_perseo---high-level-orchestration)
-  - [find_families() - Family Selection](#find_families---family-selection)
-  - [fit_gamlss_models() - Differential Expression](#fit_gamlss_models---differential-expression)
-  - [Utilities](#utilities)
-- [Advanced Usage](#advanced-usage)
-  - [Transformation Modes: Strict vs Safe](#transformation-modes-strict-vs-safe)
-- [Interpretation & Tips](#interpretation--tips)
-- [Troubleshooting](#troubleshooting)
+  - [One-Function Workflow: run_perseo()](#one-function-workflow-run_perseo)
+  - [Step-by-Step Workflow](#step-by-step-workflow)
+- [Input Specifications](#input-specifications)
+  - [Required Inputs](#required-inputs)
+  - [Workflow A: Formula + Automatic Contrasts](#workflow-a-formula--automatic-contrasts)
+  - [Workflow B: Design Matrix + Manual Contrasts](#workflow-b-design-matrix--manual-contrasts)
+- [Advanced Features](#advanced-features)
+  - [Hierarchical Testing (Omnibus + Contrasts)](#hierarchical-testing-omnibus--contrasts)
+  - [Transformation Modes](#transformation-modes)
+  - [Parallel Processing](#parallel-processing)
+- [Interpretation Guide](#interpretation-guide)
+- [FAQ](#faq)
 - [License](#license)
 
 ---
 
 ## Why PERSEO?
 
-Classical DE pipelines assume a single likelihood family for all features (often Normal or
-Negative Binomial). In high‑dimensional omics this is brittle: supports and shapes **vary by
-feature** (counts vs positive continuous vs real‑valued; skewness/zero‑inflation/overdispersion).
-PERSEO tackles this by:
+Classical differential expression pipelines assume a single likelihood family for all features:
 
-- Testing **multiple GAMLSS families per feature**.
-- Using **strict transforms** + a **common mask** so all families are compared on the **same observations**.
-- Applying **Jacobian correction** so ICs (AIC/BIC/GAIC) are comparable on the original scale.
-- Selecting the **best model** per feature and extracting **per‑term stats** from `summary(fit, what="mu")`.
-- Scaling with **future.apply**.
+- **RNA-seq tools**: Negative Binomial (DESeq2, edgeR)
+- **Microarray tools**: Normal distribution (limma)
+- **Generic tools**: Log-normal, Poisson, etc.
+
+This is **brittle** for high-dimensional omics data where:
+
+- Features vary in **support** (counts vs. positive continuous vs. real-valued)
+- Features vary in **shape** (overdispersed, zero-inflated, skewed, heavy-tailed)
+- A single family cannot fit all features well
+
+**PERSEO solves this by:**
+
+1. **Testing multiple GAMLSS families per feature** (Negative Binomial, Gamma, Log-Normal, Beta, etc.)
+2. **Using strict transformations + common masking** so all families are compared on the same observations
+3. **Applying Jacobian correction** so information criteria (BIC/AIC/GAIC) are comparable on the original scale
+4. **Selecting the best family per feature** and extracting coefficient statistics
+5. **Scaling efficiently** via parallel processing
 
 ---
 
@@ -62,1043 +73,119 @@ PERSEO tackles this by:
 
 ```r
 # Install from GitHub
-
 remotes::install_github("OPSergio/Perseo")
 ```
 
+**Dependencies**: R ≥ 4.2.0, `gamlss`, `gamlss.dist`, `dplyr`, `tibble`, `future`, `future.apply`, `progressr`
+
 ---
 
-## Data Requirements
+## Core Concepts
 
-### Required Inputs
+### Family Selection
 
-**counts_matrix**: Numeric matrix with **features in rows** and **samples in columns**
+PERSEO uses **bootstrap sampling** to identify commonly selected distribution families across a representative subset of features. This avoids the computational cost of testing all families on all features during exploration.
 
-- Dimensions: features × samples
-- Values must be numeric (integers for count data, real numbers for continuous data)
-- Typical use cases: RNA-seq counts, proteomics intensities, metabolomics abundances
-- Row names should be feature identifiers (gene IDs, protein IDs, etc.)
-- Column names should be sample identifiers matching metadata
+- **Bootstrap mode** (`bootstrap = TRUE`): Fast, samples `n_genes` features per pull for `n_boot` iterations
+- **Full evaluation mode** (`bootstrap = FALSE`): Comprehensive, evaluates all families on all features
 
-**design_matrix**: Model specification (two options available)
+### Model Selection
 
-**Option 1: Pre-built design matrix** (traditional approach)
-```r
-# Build design matrix manually using model.matrix()
-metadata$tissue_type <- relevel(factor(metadata$tissue_type), ref = "Normal")
+For each feature, PERSEO:
 
-design <- model.matrix(
-  ~ tissue_type + age_at_diagnosis + gender + batch,
-  data = metadata
-)
+1. Fits all candidate families on the **same observations** (common mask)
+2. Applies family-specific transformations with **Jacobian correction**
+3. Compares models using **BIC/AIC/GAIC** (on original scale)
+4. Selects the best family and extracts **per-term statistics** from `summary(fit, what = "mu")`
 
-# Align counts to design rows
-counts_matrix <- as.matrix(counts[, rownames(design)])
-mode(counts_matrix) <- "numeric"
+### Contrasts
 
-# Pass design matrix directly
-results <- run_perseo(
-  counts_matrix = counts_matrix,
-  design_matrix = design,
-  ...
-)
-```
+PERSEO supports two approaches for computing linear contrasts:
 
-**Option 2: Formula string + metadata** (simplified approach)
-```r
-# Prepare metadata with sample information
-metadata <- data.frame(
-  sample_id = colnames(counts),
-  tissue_type = factor(..., levels = c("Normal", "Tumor")),
-  age_at_diagnosis = numeric_vector,
-  gender = factor(...),
-  batch = factor(...),
-  row.names = colnames(counts)  # IMPORTANT: must match count matrix columns
-)
+- **Automatic**: Specify a categorical variable (`contrast_variable`) → all pairwise contrasts generated
+- **Manual**: Provide a custom contrast matrix (`contrast_matrix`) → full control over comparisons
 
-# Set reference level for factor of interest
-metadata$tissue_type <- relevel(metadata$tissue_type, ref = "Normal")
+### Hierarchical Testing
 
-# Pass formula string and metadata
-results <- run_perseo(
-  counts_matrix = counts_matrix,
-  design_matrix = "~ tissue_type + age_at_diagnosis + gender + batch",
-  metadata = metadata,  # Required when using formula strings
-  ...
-)
-```
+For multi-level factors (3+ levels), PERSEO offers **omnibus testing**:
 
-**Key Requirements**:
-- Number of rows in design matrix (or metadata) must equal number of columns in counts_matrix
-- All samples must have complete covariate information (no NAs in design variables)
-- For formula approach: row names of metadata must match column names of counts_matrix
-- Factor variables should have reference level explicitly set using `relevel()`
+1. **Stage 1 (Omnibus)**: Test if factor has *any* effect (multi-df test)
+2. **Stage 2 (Contrasts)**: Only compute pairwise contrasts for significant features
 
-### Optional Inputs: Contrast Specification
-
-PERSEO provides two methods for specifying contrasts (comparisons between groups):
-
-**Method 1: Automatic contrast generation** (recommended for simple cases)
-```r
-# Automatically generate all pairwise contrasts for a factor
-results <- run_perseo(
-  counts_matrix = counts_matrix,
-  design_matrix = "~ tissue_type + age + gender",
-  metadata = metadata,
-  contrast_variable = "tissue_type",  # Auto-generate all tissue comparisons
-  omnibus = TRUE,                     # Optional: hierarchical testing
-  ...
-)
-
-# Example: If tissue_type has levels c("Normal", "Luminal", "Basal")
-# This automatically creates:
-# - Luminal_vs_Normal
-# - Basal_vs_Normal
-# - Basal_vs_Luminal
-```
-
-**Method 2: Manual contrast matrix** (for complex custom contrasts)
-```r
-# Build design matrix to see coefficient names
-design <- model.matrix(~ tissue_type + age, data = metadata)
-colnames(design)
-#> [1] "(Intercept)" "tissue_typeLuminal" "tissue_typeBasal" "age"
-
-# Define custom contrasts as linear combinations
-contrast_matrix <- matrix(0, nrow = 3, ncol = ncol(design))
-colnames(contrast_matrix) <- colnames(design)
-rownames(contrast_matrix) <- c(
-  "Luminal_vs_Normal",      # Standard comparison
-  "Basal_vs_Luminal",       # Non-reference comparison
-  "AvgTumor_vs_Normal"      # Average of tumor subtypes vs normal
-)
-
-# Luminal vs Normal (just the Luminal coefficient)
-contrast_matrix["Luminal_vs_Normal", "tissue_typeLuminal"] <- 1
-
-# Basal vs Luminal (Basal - Luminal)
-contrast_matrix["Basal_vs_Luminal", "tissue_typeBasal"] <- 1
-contrast_matrix["Basal_vs_Luminal", "tissue_typeLuminal"] <- -1
-
-# Average of tumor subtypes vs Normal
-contrast_matrix["AvgTumor_vs_Normal", "tissue_typeLuminal"] <- 0.5
-contrast_matrix["AvgTumor_vs_Normal", "tissue_typeBasal"] <- 0.5
-
-# Pass custom contrast matrix
-results <- run_perseo(
-  counts_matrix = counts_matrix,
-  design_matrix = design,
-  contrast_matrix = contrast_matrix,  # Manual specification
-  ...
-)
-```
-
-**Choosing between methods**:
-- Use `contrast_variable` when you want ALL pairwise comparisons for a single factor
-- Use `contrast_matrix` when you need specific custom contrasts (e.g., averages, complex combinations)
-- Both methods compute standard errors, z-statistics, and FDR-adjusted p-values
-- P-values are adjusted separately for each contrast across all features
+This mirrors ANOVA + post-hoc workflow and reduces multiple testing burden.
 
 ---
 
 ## Quick Start
 
-**PERSEO** provides a high-level orchestration function `run_perseo()` that handles the complete workflow in a single call:
+### One-Function Workflow: `run_perseo()`
 
-### Basic Differential Expression
+The simplest way to use PERSEO is via `run_perseo()`, which handles family selection, differential expression, and contrast computation in one call.
 
 ```r
 library(PERSEO)
 library(dplyr)
 
-# 1. Load your own omics data
-# counts: matrix with features (genes/proteins/metabolites) in rows, samples in columns
-# metadata: data.frame with sample information and covariates
-
-# 2. Set reference level for your condition of interest
-metadata$tissue_type <- relevel(factor(metadata$tissue_type), ref = "Normal")
-
-# 3. Build design matrix with covariates
-design <- model.matrix(
-  ~ tissue_type + age_at_diagnosis + gender + initial_weight +
-    laterality + ajcc_pathologic_stage,
-  data = metadata
+# Prepare metadata
+metadata <- data.frame(
+  sample_id = colnames(counts_matrix),
+  condition = factor(c(rep("Control", 50), rep("Treatment", 50))),
+  age = rnorm(100, 50, 10),
+  batch = factor(rep(1:4, each = 25)),
+  row.names = colnames(counts_matrix)
 )
 
-# 4. Align counts to design rows
-counts_matrix <- as.matrix(counts[, rownames(design)])
-mode(counts_matrix) <- "numeric"
+# Set reference level
+metadata$condition <- relevel(metadata$condition, ref = "Control")
 
-# 5. Run complete PERSEO pipeline
+# Run complete pipeline
 results <- run_perseo(
   counts_matrix = counts_matrix,
-  design_matrix = design,
-  n_genes = 200,           # Features to sample for family selection
-  n_boot = 10,             # Bootstrap iterations
-  top_n = 4,               # Top families to select
-  criterion = "BIC",       # Model selection criterion
-  min_n = 20,              # Minimum valid observations
-  p_adjust_method = "BH",  # Multiple testing correction
-  verbose = TRUE,          # Show progress messages
-  seed = 123               # Reproducibility
+  design_matrix = "~ condition + age + batch",  # formula string
+  metadata = metadata,                           # required for formula
+  n_genes = 200,                                 # features to sample
+  n_boot = 10,                                   # bootstrap iterations
+  top_n = 4,                                     # top families to select
+  criterion = "BIC",                             # model selection criterion
+  contrast_variable = "condition",               # auto-generate contrasts
+  p_adjust_method = "BH",                        # FDR correction
+  parallel = TRUE,                               # enable parallelization
+  workers = 4,                                   # number of cores
+  verbose = TRUE,
+  seed = 123
 )
 
-# 6. View results summary
+# View results
 print(results)
 
-# 7. Access components
-head(results$differential_expression$results)   # DE results with FDR
-head(results$differential_expression$selection) # Best family per feature
-results$family_selection$top_families_overall   # Selected families
-results$summary                                  # Execution summary
+# Access components
+head(results$differential_expression$results)    # Coefficient statistics
+head(results$differential_expression$selection)  # Best family per feature
+head(results$differential_expression$contrasts)  # Pairwise contrasts
+results$family_selection$top_families_overall    # Selected families
 
-# 8. Filter significant results (FDR < 0.05)
-sig_results <- results$differential_expression$results %>%
-  filter(p_adj < 0.05, grepl("^tissue_type", term))
-```
+# Filter significant results (FDR < 0.05)
+sig_de <- results$differential_expression$results %>%
+  filter(p_adj < 0.05, grepl("^condition", term))
 
-### Full Evaluation Mode (No Bootstrap)
-
-For comprehensive analysis, evaluate all families on all features:
-
-```r
-# Run PERSEO without bootstrap sampling
-results_full <- run_perseo(
-  counts_matrix = counts_matrix,
-  design_matrix = design,
-  bootstrap = FALSE,       # Evaluate ALL features
-  top_n = 4,
-  criterion = "BIC",
-  p_adjust_method = "BH",
-  verbose = TRUE,
-  seed = 123
-)
-
-# This mode is slower but provides complete family selection for every feature
-```
-
-### Custom Contrasts (Multi-Level Factors)
-
-When you have 3+ levels in a factor and want to compare non-reference levels (e.g., comparing tumor subtypes when "Normal" is reference), use **custom contrast matrices**:
-
-```r
-# 1. Prepare data
-metadata$tissue_type <- relevel(factor(metadata$tissue_type), ref = "Normal")
-design <- model.matrix(
-  ~ tissue_type + age_at_diagnosis + gender,
-  data = metadata
-)
-counts_matrix <- as.matrix(counts[, rownames(design)])
-
-# 2. Build custom contrast matrix manually
-# Columns must match coefficient names from design matrix
-# Rows define contrasts of interest
-coef_names <- colnames(design)
-# Example: Assuming design has coefficients: 
-# (Intercept), tissue_typeLuminal, tissue_typeBasal, age_at_diagnosis, genderMale
-
-contrast_matrix <- matrix(0, nrow = 3, ncol = length(coef_names))
-colnames(contrast_matrix) <- coef_names
-rownames(contrast_matrix) <- c("Luminal_vs_Normal", "Basal_vs_Normal", "Basal_vs_Luminal")
-
-# Luminal vs Normal (just the Luminal coefficient)
-contrast_matrix["Luminal_vs_Normal", "tissue_typeLuminal"] <- 1
-
-# Basal vs Normal (just the Basal coefficient)
-contrast_matrix["Basal_vs_Normal", "tissue_typeBasal"] <- 1
-
-# Basal vs Luminal (Basal - Luminal)
-contrast_matrix["Basal_vs_Luminal", "tissue_typeBasal"] <- 1
-contrast_matrix["Basal_vs_Luminal", "tissue_typeLuminal"] <- -1
-
-# 3. Run PERSEO with contrasts
-results <- run_perseo(
-  counts_matrix = counts_matrix,
-  design_matrix = design,
-  contrast_matrix = contrast_matrix,
-  n_genes = 200,
-  n_boot = 10,
-  top_n = 4,
-  criterion = "BIC",
-  p_adjust_method = "BH",
-  verbose = TRUE,
-  seed = 123
-)
-
-# 4. Access contrast results
-head(results$differential_expression$contrasts)  # Contrast estimates, SE, z-scores, p-values
-
-# 5. Filter significant contrasts (FDR < 0.05)
 sig_contrasts <- results$differential_expression$contrasts %>%
   filter(p_adj < 0.05)
-
-# Example: Find features with significant Basal vs Luminal differences
-basal_luminal_diff <- sig_contrasts %>%
-  filter(contrast == "Basal_vs_Luminal", abs(estimate) > 1)
 ```
-
-### Hierarchical Testing with Omnibus (NEW)
-
-For multi-level factors, PERSEO supports **hierarchical testing**: first test whether the factor has *any* effect (omnibus test), then only compute pairwise contrasts for significant features. This mirrors the ANOVA + post-hoc workflow and reduces multiple testing burden.
-
-#### Basic Usage
-
-```r
-# Automatic pairwise contrasts with omnibus filtering
-results <- run_perseo(
-  counts_matrix = counts_matrix,
-  design_matrix = design,
-  metadata = metadata,
-  candidate_families = c("NBI", "GG", "LOGNO"),
-  contrast_variable = "tissue_type",  # Auto-generate pairwise contrasts
-  omnibus = TRUE,                     # Enable hierarchical testing
-  omnibus_threshold = 0.05,           # Only contrast if omnibus p < 0.05
-  omnibus_test = "Wald",              # "Wald" (fast) or "LRT" (robust)
-  n_genes = 200,
-  n_boot = 10,
-  verbose = TRUE
-)
-
-# View omnibus test results
-head(results$differential_expression$omnibus)
-#> # A tibble: 6 × 7
-#>   feature  family test_type statistic    df p_value pass 
-#>   <chr>    <chr>  <chr>         <dbl> <int>   <dbl> <lgl>
-#> 1 Gene_001 NBI    Wald          12.5      2  0.0019 TRUE 
-#> 2 Gene_002 GG     Wald           3.2      2  0.201  FALSE
-#> 3 Gene_003 NBI    Wald          18.7      2  0.0001 TRUE 
-
-# View contrasts (only for features passing omnibus)
-head(results$differential_expression$contrasts)
-#> # A tibble: 6 × 8
-#>   feature  family contrast       estimate     se      z  p_value   p_adj
-#>   <chr>    <chr>  <chr>             <dbl>  <dbl>  <dbl>    <dbl>   <dbl>
-#> 1 Gene_001 NBI    Brain_vs_Liver    0.45   0.12   3.75  0.00018 0.00054
-#> 2 Gene_001 NBI    Heart_vs_Liver    0.23   0.13   1.77  0.077   0.115  
-#> 3 Gene_001 NBI    Heart_vs_Brain   -0.22   0.12  -1.83  0.067   0.101  
-```
-
-#### When to Use Omnibus Testing
-
-**Use when:**
-- Factor has 3 or more levels
-- You want to control false positives more strictly
-- You have many features (1000+)
-- Computational efficiency is important
-
-**Skip when:**
-- Factor has only 2 levels (omnibus reduces to single pairwise test)
-- You have pre-specified contrasts of interest
-- Dataset is small (fewer than 100 features)
-- Exploratory analysis where you want to see all contrasts
-
-#### Choosing the Omnibus Test
-
-| Test | Speed | Statistical Rigor | Best For |
-|------|-------|-------------------|----------|
-| **Wald** (default) | Fast | Standard | Large datasets (n > 30/group), standard families |
-| **LRT** | Slower (approximately 2x overhead) | More robust | Small datasets, complex families |
-
-**Wald Test**:
-- Uses variance-covariance matrix from fitted model
-- Test: W = β'V⁻¹β ~ χ²(df)
-- **Pros**: Fast, memory-efficient, no convergence issues
-- **Cons**: Asymptotic (less accurate for small n)
-
-**Likelihood Ratio Test (LRT)**:
-- Fits full and reduced models, compares likelihoods
-- Test: LRT = 2(logLik_full - logLik_reduced) ~ χ²(df)
-- **Pros**: More robust, gold standard for nested models
-- **Cons**: Slower, potential convergence issues
-
-See `docs/omnibus_testing.md` for detailed examples and guidance.
-
-**What `run_perseo()` does:**
-
-1. **Family Selection**: Bootstraps a subset of features to identify the most frequently selected GAMLSS families
-2. **Differential Expression**: Fits selected families to all features and picks the best model per feature
-3. **Custom Contrasts** (optional): Computes arbitrary linear combinations of coefficients (e.g., comparing non-reference levels)
-4. **Multiple Testing Correction**: Applies global FDR adjustment across all tests
-
-**Returns** a `perseo_results` object with:
-- `$family_selection`: Family selection bootstrap results
-- `$differential_expression$results`: DE results with adjusted p-values
-- `$differential_expression$selection`: Best family per feature
-- `$differential_expression$omnibus`: Omnibus test results (if `omnibus = TRUE`)
-- `$differential_expression$contrasts`: Contrast results (if contrasts requested)
-- `$summary`: Execution metadata and status
-
----
-
-## Function Reference
-
-### `run_perseo()` - High-Level Orchestration
-
-One-function workflow combining family selection, differential expression, and p-value adjustment.
-
-**Usage**
-
-```r
-results <- run_perseo(
-  counts_matrix,
-  design_matrix,
-  metadata = NULL,               # NEW: Required for contrast_variable or formula
-  contrast_matrix = NULL,
-  contrast_variable = NULL,      # NEW: Auto-generate pairwise contrasts
-  omnibus = FALSE,               # NEW: Enable hierarchical testing
-  omnibus_threshold = 0.05,      # NEW: Omnibus significance threshold
-  omnibus_test = "Wald",         # NEW: "Wald" or "LRT"
-  bootstrap = TRUE,
-  n_genes = 200,
-  n_boot = 10,
-  top_n = 4,
-  families = NULL,
-  group_by_support = TRUE,
-  criterion = "GAIC",
-  gaic_k = NULL,
-  min_n = 5,
-  binom_bd = NULL,
-  filter_beta_inflated = TRUE,
-  p_adjust_method = "BH",
-  verbose = TRUE,
-  seed = NULL
-)
-```
-
-**Key Arguments**
-
-**Required inputs:**
-- `counts_matrix`: Numeric matrix (features × samples). Feature IDs in row names, sample IDs in column names.
-- `design_matrix`: Either:
-  - Pre-built model matrix from `model.matrix()` with `nrow = ncol(counts_matrix)`, OR
-  - Formula string (e.g., `"~ tissue_type + age + batch"`) when `metadata` is provided
-
-**Contrast specification (optional):**
-- `metadata`: Data frame with sample metadata. Required when:
-  - Using formula string for `design_matrix`, OR
-  - Using `contrast_variable` for automatic contrast generation
-  - Row names must match column names of `counts_matrix`
-- `contrast_matrix`: Numeric matrix for custom linear contrasts (manual specification)
-- `contrast_variable`: Character string naming a factor in `metadata` for auto-generating all pairwise contrasts
-
-**Omnibus testing (optional):**
-- `omnibus`: Logical; enable hierarchical testing (omnibus test before contrasts). Default `FALSE`
-- `omnibus_threshold`: Numeric; only compute contrasts if omnibus p-value < threshold. Default `0.05`
-- `omnibus_test`: Character; `"Wald"` (fast) or `"LRT"` (robust). Default `"Wald"`
-
-**Family selection:**
-- `bootstrap`: Logical; if `TRUE` (default), uses bootstrap sampling; if `FALSE`, evaluates all features
-- `n_genes`: Number of features to sample per bootstrap pull (ignored if `bootstrap = FALSE`)
-- `n_boot`: Number of bootstrap iterations (ignored if `bootstrap = FALSE`)
-- `top_n`: Number of top families to select after bootstrapping
-- `families`: Character vector of candidate families (`NULL` = use sensible defaults)
-
-**Model selection:**
-- `criterion`: Model selection criterion; `"GAIC"`, `"BIC"`, or `"AIC"`. Default `"GAIC"`
-- `gaic_k`: Penalty parameter for GAIC (`NULL` = adaptive penalty)
-
-**Multiple testing:**
-- `p_adjust_method`: Method for FDR correction; `"BH"`, `"bonferroni"`, `"holm"`, etc. Default `"BH"`
-
-**Computational:**
-- `parallel`: Logical; enable automatic parallel processing. Default `FALSE`
-- `workers`: Integer; number of cores (`NULL` = auto-detect)
-- `verbose`: Logical; show progress messages. Default `TRUE`
-- `seed`: Integer; for reproducibility (`NULL` = no seed)
-
-**Bootstrap vs Full Evaluation**
-
-- `bootstrap = TRUE` (default): Fast, samples a subset of features to identify common families
-- `bootstrap = FALSE`: Comprehensive, evaluates all families on ALL features (slower but thorough)
-
-**Returns**
-
-`perseo_results` S3 object with:
-- `family_selection`: output from `find_families()`
-- `differential_expression`: output from `fit_gamlss_models()` with global p-value adjustment
-  - `results`: DE results per term
-  - `selection`: Best family per feature
-  - `omnibus`: Omnibus test results (when `omnibus = TRUE`)
-  - `contrasts`: Pairwise contrasts (when contrasts requested)
-- `summary`: list with execution metadata
-
----
-
-### `find_families()` - Family Selection
-
-Identify frequent, plausible GAMLSS families via bootstrap sampling. For each sampled feature,
-it fits **intercept‑only** models across candidate families using **strict transforms**, a **common mask**,
-and **Jacobian‑corrected** IC.
-
-**Usage**
-
-```r
-ff <- find_families(
-  counts_matrix,
-  n_genes          = 200,
-  n_boot           = 10,
-  top_n            = 4,
-  families         = NULL,     # if NULL, a default panel is used
-  criterion        = "BIC",    # "GAIC" or "AIC"
-  gaic_k           = NULL,     # if GAIC and NULL -> log(n_valid)
-  min_n            = 5,
-  seed             = NULL,
-  group_by_support = FALSE,    # do NOT hard-filter by inferred support
-  binom_bd         = NULL,     # optional denominator for BI/BB
-  filter_beta_inflated = TRUE,
-  thr_zero         = 0.005,
-  thr_one          = 0.005,
-  verbose          = TRUE
-)
-```
-
-**Arguments (key)**
-
-- `counts_matrix`: numeric matrix (features × samples).
-- `families`: character vector of families to test; if `NULL`, uses a default panel covering
-  unit interval, counts (incl. zero‑inflated), positive continuous, and real‑valued.
-- `criterion`: `"BIC"` (recommended), `"GAIC"`, `"AIC"`.
-- `group_by_support`: if `TRUE`, restricts candidates by inferred empirical support; if `FALSE`
-  (recommended), the support is kept as **metadata** only (no hard gating).
-- `min_n`: minimum valid samples after the common mask.
-
-**Returns**
-
-A list with:
-- `top_families_overall`: character vector (length = `top_n`).
-- `top_families_by_support`: list with top families per support class (metadata).
-- `freq_table_overall`, `prop_table_overall`: frequency/proportion tables.
-- `freq_by_support`, `prop_by_support`: by support class.
-- `sampled_results`: tibble with one row per feature×bootstrap pull, including
-  `feature`, `family`, `skipped`, `n_valid`, `support`, `bootstrap`.
-
-**Example**
-
-```r
-candidate_pool <- c("PO","NBI","ZIP","ZINBI","GA","GG","IG","LOGNO","NO","TF")
-
-ff <- find_families(
-  counts_matrix    = counts_matrix,
-  n_genes          = 300,
-  n_boot           = 5,
-  top_n            = 6,
-  families         = candidate_pool,
-  criterion        = "BIC",
-  min_n            = 20,
-  seed             = 123,
-  group_by_support = FALSE
-)
-
-ff$top_families_overall
-#> [1] "GG"    "LOGNO" "NBI"   "GA"    "TF"    "NO"
-
-ff$freq_table_overall
-#> GG   LOGNO   NBI   GA   TF  NO
-#> 142     91    64   28    7   2
-
-ff$prop_table_overall
-#>       GG    LOGNO     NBI      GA      TF      NO
-#> 0.473333 0.303333 0.213333 0.093333 0.023333 0.006667
-
-ff$top_families_by_support
-#> $count
-#> [1] "NBI" "PO"  "ZINBI"
-#>
-#> $unit
-#> [1] "BE" "BEINF"
-#>
-#> $positive
-#> [1] "GG"    "LOGNO" "GA"    "IG"
-#>
-#> $real
-#> [1] "TF" "NO"
-
-head(ff$sampled_results)
-# A tibble: 6 × 6
-#  bootstrap feature         family skipped n_valid support
-#      <int> <chr>           <chr>  <lgl>      <int> <chr>
-#1         1 GENE_0001       GG     FALSE        213 positive
-#2         1 GENE_0002       NBI    FALSE        208 count
-#3         1 GENE_0003       LOGNO  FALSE        214 positive
-#4         1 GENE_0004       GA     FALSE        210 positive
-#5         1 GENE_0005       TF     FALSE        216 real
-#6         1 GENE_0006       GG     FALSE        211 positive
-
-with(ff$sampled_results[!ff$sampled_results$skipped, ], table(support, family))
-```
-
----
-
-### `fit_gamlss_models()` - Differential Expression
-
-Fit multiple GAMLSS families per feature on a **common set of observations**, apply
-**Jacobian correction**, select the **best family** by IC, and return **per‑term statistics**
-from `summary(fit, what="mu")`. This "no‑VCOV mode" avoids fragile covariance extraction and
-is robust across families.
-
-> **Note**: When using `run_perseo()`, this function is called automatically with selected families.
-> Use directly only for advanced workflows or when you already know which families to test.
-
-**Usage**
-
-```r
-options(progressr.enable = TRUE)
-if (requireNamespace("cli", quietly = TRUE)) progressr::handlers("cli")
-
-fit <- fit_gamlss_models(
-  counts_matrix      = counts_matrix,
-  design_matrix      = design,
-  metadata           = metadata,           # NEW: For contrast_variable or formula
-  candidate_families = candidate_families,  # e.g., ff$top_families_overall
-  criterion          = "BIC",
-  gaic_k             = NULL,
-  min_n              = 20,
-  contrast_matrix    = NULL,               # NEW: Custom contrasts
-  contrast_variable  = NULL,               # NEW: Auto-generate contrasts
-  omnibus            = FALSE,              # NEW: Hierarchical testing
-  omnibus_threshold  = 0.05,               # NEW: Omnibus filter threshold
-  omnibus_test       = "Wald",             # NEW: "Wald" or "LRT"
-  p_adjust           = "BH",
-  parallel           = FALSE,              # NEW: Auto-configure parallel
-  workers            = NULL,               # NEW: Number of cores
-  show_progress      = TRUE,
-  progress_label     = "Fitting genes",
-  transform_mode     = "strict"
-)
-```
-
-**Arguments**
-
-- `counts_matrix`, `design_matrix`: see [Data Requirements](#data-requirements).
-- `metadata`: data.frame with sample metadata (required for `contrast_variable`).
-- `candidate_families`: character vector of GAMLSS families to compare.
-- `criterion`: `"BIC"` (recommended), `"GAIC"`, `"AIC"`.
-- `min_n`: minimum valid samples after common mask.
-- `contrast_matrix`: numeric matrix for custom contrasts (see examples above).
-- `contrast_variable`: character; auto-generate all pairwise contrasts for this factor.
-- `omnibus`: logical; perform omnibus test before contrasts. Default `FALSE`.
-- `omnibus_threshold`: numeric; only contrast if omnibus p < threshold. Default `0.05`.
-- `omnibus_test`: `"Wald"` (fast, uses vcov) or `"LRT"` (robust, refits model). Default `"Wald"`.
-- `p_adjust`: method passed to `p.adjust()` to compute **FDR per term** (for results) and **FDR per contrast** (for contrasts) across features. Default `"BH"`.
-- `parallel`: logical; enable automatic parallel processing. Default `FALSE`.
-- `workers`: integer; number of cores (auto-detected if `NULL`).
-- `show_progress`, `progress_label`: progressr control.
-- `transform_mode`: transformation mode used.
-
-**Outputs**
-
-Returns a list with:
-
-- `selection` (one row per feature)
-  - `feature`: feature ID (rownames of `counts_matrix`).
-  - `best_family`: winning family by corrected IC.
-  - `n_valid_obs`: number of samples used after the common mask.
-  - `ic_value`: **Jacobian‑corrected** IC for the best family.
-  - `transform_mode`: transformation mode used.
-
-- `results` (multiple rows per feature; per‑term statistics on `mu`)
-  - `feature`: feature ID.
-  - `term`: coefficient name from the design (e.g., `tissue_typeTumor`, `age_at_diagnosis`).
-  - `effect`: coefficient estimate (on the link of `mu`).
-  - `se`: standard error (as reported by `summary()`; may be `NA` if not available).
-  - `stat`: Wald statistic (often `t`).
-  - `pval`: p‑value of the term.
-  - `padj`: FDR (adjusted across features **by term**).
-
-- `omnibus` (when `omnibus = TRUE` and contrasts requested)
-  - `feature`: feature ID.
-  - `family`: best-fitting family.
-  - `test_type`: `"Wald"` or `"LRT"`.
-  - `statistic`: test statistic.
-  - `df`: degrees of freedom (number of factor levels - 1).
-  - `p_value`: omnibus p-value.
-  - `pass`: logical; TRUE if p_value < omnibus_threshold.
-
-- `contrasts` (when `contrast_matrix` or `contrast_variable` provided)
-  - `feature`: feature ID.
-  - `family`: best-fitting family for this feature.
-  - `contrast`: contrast name (from rownames or auto-generated).
-  - `estimate`: point estimate of the linear combination.
-  - `se`: standard error (computed from variance-covariance matrix).
-  - `z`: z-statistic.
-  - `p_value`: two-sided p-value.
-  - `p_adj`: FDR-adjusted p-value (BH correction **by contrast** across features).
-
-**Example output:**
-
-```r
-head(fit$selection)
-# A tibble: 6 × 4
-#  feature            best_family n_valid_obs ic_value
-#  <chr>              <chr>             <int>    <dbl>
-#1 ENSG00000153002.12 GG                 1176   19590.
-#2 ENSG00000210082.2  GG                 1176   32447.
-#3 ENSG00000276168.1  GG                 1176   19424.
-#4 ENSG00000211896.7  GG                 1176   28663.
-#5 ENSG00000198804.2  GG                 1176   32901.
-#6 ENSG00000108821.14 GG                 1176   32407.
-
-head(fit$results)
-# A tibble: 6 × 7
-#  feature            term                 effect      se    stat     pval     padj
-#  <chr>              <chr>                 <dbl>   <dbl>   <dbl>    <dbl>    <dbl>
-#1 ENSG00000153002.12 X.Intercept.        6.89e+0 6.45e-1 10.7    1.77e-25 1.85e-25
-#2 ENSG00000153002.12 tissue_typeTumor   -7.72e-1 4.05e-1 -1.90   5.71e- 2 7.11e- 2
-#3 ENSG00000153002.12 age_at_diagnosis    1.05e-6 2.44e-5  0.0429 9.66e- 1 9.79e- 1
-#4 ENSG00000153002.12 gendermale          1.03e+0 1.17e+0  0.877  3.81e- 1 7.56e- 1
-#5 ENSG00000153002.12 X.Intercept..1      1.39e+0 2.02e-2 69.1    0        0
-#6 ENSG00000153002.12 X.Intercept..2      9.02e-2 1.11e-2  8.13   1.08e-15 2.15e-15
-
-# With omnibus testing
-head(fit$omnibus)
-# A tibble: 6 × 7
-#  feature  family test_type statistic    df p_value pass 
-#  <chr>    <chr>  <chr>         <dbl> <int>   <dbl> <lgl>
-#1 Gene_001 NBI    Wald          12.5      2  0.0019 TRUE 
-#2 Gene_002 GG     Wald           3.2      2  0.201  FALSE
-#3 Gene_003 NBI    Wald          18.7      2  0.0001 TRUE 
-
-head(fit$contrasts)
-# A tibble: 6 × 8
-#  feature  family contrast       estimate     se      z  p_value   p_adj
-#  <chr>    <chr>  <chr>             <dbl>  <dbl>  <dbl>    <dbl>   <dbl>
-#1 Gene_001 NBI    Brain_vs_Liver    0.45   0.12   3.75  0.00018 0.00054
-#2 Gene_001 NBI    Heart_vs_Liver    0.23   0.13   1.77  0.077   0.115  
-```
-
-**Notes**
-
-- `fit_gamlss_models()` removes an explicit `"(Intercept)"` column from `design_matrix` to
-  avoid double intercepts when using `y ~ .`
-- The **common mask** combines family domain validity and `complete.cases(design)` to prevent
-  optimizer failures (e.g., `sigma` working vector issues)
-- When `omnibus = TRUE`, contrasts are only computed for features where `omnibus$pass == TRUE`
-- The omnibus p-value is NOT used in contrast p-value adjustment (contrasts are still adjusted **by contrast** across features)
-
----
-
-### Working with Multi-Level Factors
-
-When your design includes a factor with >2 levels (e.g., `Status` with levels Healthy, Mild, Severe), the default model output provides coefficients for each level **relative to the reference level** (treatment coding). To obtain **custom contrasts** between levels (e.g., Mild-Severe, or average of Mild+Severe vs Healthy), pass a **contrast matrix** `makeContrasts`:
-
-**Example: Custom Contrast Matrix**
-
-```r
-# Simulate data with 3-level Status factor
-metadata <- data.frame(
-  Status = factor(rep(c("Healthy", "Mild", "Severe"), each = 20)),
-  Age = rnorm(60, 50, 10)
-)
-
-# Create design matrix (Healthy is reference by default)
-design <- model.matrix(~ Status + Age, data = metadata)
-colnames(design)
-#> [1] "(Intercept)" "StatusMild"  "StatusSevere" "Age"
-
-# Define contrasts of interest
-# Each row is a linear combination of coefficients
-C <- rbind(
-  "Mild_vs_Severe" = c(0, 1, -1, 0),      # StatusMild - StatusSevere
-  "MS_avg_vs_Healthy" = c(0, 0.5, 0.5, 0) # (Mild + Severe)/2 - Healthy
-)
-colnames(C) <- colnames(design)
-
-# Fit with custom contrasts
-fit <- fit_gamlss_models(
-  counts_matrix = counts,
-  design_matrix = design,
-  candidate_families = c("NBI", "GG", "LOGNO"),
-  contrast_matrix = C,  # Pass contrast matrix directly
-  workers = 4
-)
-
-# Standard coefficient results (Mild-Healthy, Severe-Healthy, Age effect)
-head(fit$results)
-# A tibble: 6 × 7
-#  feature   term          effect     se  stat    pval    padj
-#  <chr>     <chr>          <dbl>  <dbl> <dbl>   <dbl>   <dbl>
-#1 GENE_001  StatusMild     0.234  0.089  2.63 0.00856 0.0234
-#2 GENE_001  StatusSevere   0.567  0.092  6.16 7.3e-10 2.1e-9
-#3 GENE_001  Age            0.012  0.005  2.40 0.0164  0.0352
-
-# Custom contrasts (Mild-Severe, avg of Mild+Severe vs Healthy)
-head(fit$contrasts)
-# A tibble: 6 × 8
-#  feature  family contrast             estimate    se     z p_value  p_adj
-#  <chr>    <chr>  <chr>                   <dbl> <dbl> <dbl>   <dbl>  <dbl>
-#1 GENE_001 NBI    Mild_vs_Severe         -0.333 0.095 -3.51 0.00045 0.00128
-#2 GENE_001 NBI    MS_avg_vs_Healthy       0.401 0.064  6.27 3.6e-10 1.1e-9
-#3 GENE_002 GG     Mild_vs_Severe         -0.078 0.088 -0.89 0.375   0.523
-#4 GENE_002 GG     MS_avg_vs_Healthy       0.084 0.061  1.38 0.168   0.287
-```
-
-**Outputs**
-
-When `contrast_matrix` is provided, the output list includes a third element:
-
-- `contrasts` (multiple rows per feature; one per contrast)
-  - `feature`: feature ID
-  - `family`: best-fitting family for this feature
-  - `contrast`: contrast name (from `rownames(C)`)
-  - `estimate`: point estimate of the linear combination
-  - `se`: standard error (computed from variance-covariance matrix)
-  - `z`: z-statistic
-  - `p_value`: two-sided p-value
-  - `p_adj`: FDR-adjusted p-value (BH correction **by contrast** across features)
-
-**Building Contrast Matrices**
-
-Each row of the contrast matrix defines a linear combination of model coefficients:
-
-```r
-# For design with columns: (Intercept), StatusMild, StatusSevere, Age
-# Coefficients represent:
-# - (Intercept): baseline (Healthy group at Age=0)
-# - StatusMild: Mild - Healthy
-# - StatusSevere: Severe - Healthy
-# - Age: linear age effect
-
-# Example contrasts:
-C <- rbind(
-  # Mild vs Severe: (StatusMild) - (StatusSevere)
-  "Mild_vs_Severe" = c(0, 1, -1, 0),
-  
-  # Healthy vs average of diseased: 0 - (StatusMild + StatusSevere)/2
-  "Healthy_vs_Disease" = c(0, -0.5, -0.5, 0),
-  
-  # Severe vs Healthy (same as coefficient StatusSevere)
-  "Severe_vs_Healthy" = c(0, 0, 1, 0)
-)
-colnames(C) <- c("(Intercept)", "StatusMild", "StatusSevere", "Age")
-```
-
-**Important Notes**
-
-- Contrasts are computed using `vcov(fit, what = "mu")`. If the covariance matrix extraction fails or contains non-finite values, contrasts will be `NA` for that feature (the function does **not** error).
-- The `p_adj` column in `contrasts` is computed **by contrast** across all features (e.g., all "Mild_vs_Severe" comparisons are adjusted together).
-- Standard coefficient results in `fit$results` remain unchanged—contrasts are an **additional output**.
-- The model is **re-fitted** for the best family when contrasts are requested to extract `vcov`, which adds computational overhead.
-
----
-
-### Utilities
-
-- `transform_for_family_strict(y, fam, eps = 1e-6, allow_eps = TRUE)`  
-  Returns list with `y` (transformed), `mask` (valid obs), `logJ_per_obs`, and `meta`.
-- `inverse_transform(z, meta)`  
-  Invert strict transforms back to original scale.
-- `family_groups()`  
-  Family names grouped by theoretical support (count / unit / positive / real).
-
----
-
-## Advanced Usage
-
-### Omnibus Testing: Wald vs LRT
-
-**Comparison Table**
-
-| Criterion | Wald | LRT |
-|-----------|------|-----|
-| **How it works** | Uses vcov from fitted model | Refits full + reduced models |
-| **Test statistic** | W = β'V⁻¹β ~ χ²(df) | 2(logLik_full - logLik_reduced) ~ χ²(df) |
-| **Speed** | Fast (no refitting) | ~2× slower |
-| **Memory** | Low | Higher (2 models per feature) |
-| **Sample size** | Best for n > 30/group | Better for n < 30/group |
-| **Robustness** | Asymptotic | More robust |
-| **Convergence** | No issues | Reduced model may fail |
-| **Best for** | Large datasets, standard families | Small datasets, complex families |
-
-**Example: Wald Test (Default)**
-
-```r
-fit_wald <- fit_gamlss_models(
-  counts_matrix = counts,
-  design_matrix = design,
-  metadata = metadata,
-  candidate_families = c("NBI", "GG"),
-  contrast_variable = "tissue_type",
-  omnibus = TRUE,
-  omnibus_test = "Wald",  # Fast
-  parallel = TRUE,
-  workers = 8
-)
-```
-
-**Example: LRT**
-
-```r
-fit_lrt <- fit_gamlss_models(
-  counts_matrix = counts,
-  design_matrix = design,
-  metadata = metadata,
-  candidate_families = c("NBI", "GG"),
-  contrast_variable = "tissue_type",
-  omnibus = TRUE,
-  omnibus_test = "LRT",  # More robust
-  parallel = TRUE,
-  workers = 8
-)
-```
-
-**Decision Guide**
-
-Use **Wald** when:
-- Speed is priority
-- Using standard GAMLSS families (NBI, GG, LOGNO)
-- Limited computational resources
-- Large sample sizes (n > 30 per group)
-
-Use **LRT** when:
-- Maximum statistical rigor required
-- Working with complex or unusual families
-- Small sample sizes (n < 30 per group)
-- Computational time is not a constraint
-
----
-
-### Transformation Modes: Strict vs Safe
-
-PERSEO supports two transformation modes for adapting data to GAMLSS family requirements:
-
-#### **Strict Mode** (Default with `group_by_support = TRUE`)
-
-**Behavior:**
-- Enforces theoretical domain requirements without modifying data
-- Invalid observations (e.g., zeros for positive families, non-integers for count families) are **excluded via mask**
-- No data repair or clipping
-- Conservative, domain-preserving approach
-
-**When to use:**
-- You want support-consistent, conservative analysis
-- Domain violations should exclude observations rather than transform them
-- Default for most analyses when `group_by_support = TRUE`
-
-**Example:**
-```r
-ff <- find_families(
-  counts_matrix = counts_matrix,
-  group_by_support = TRUE,
-  transform_mode = "strict",  # Can be omitted (default)
-  n_genes = 200,
-  criterion = "BIC"
-)
-```
-
-#### **Safe Mode** (Default with `group_by_support = FALSE`)
-
-**Behavior:**
-- Applies **global, deterministic, reversible affine transformations**: y* = a·y + b (a > 0)
-- No observation-wise clipping or rounding
-- All transformations are invertible with Jacobian correction
-- Allows flexible family exploration across support boundaries
-
-**Family-specific transformations:**
-- **Positive families** (GA, GG, LOGNO, IG): Global shift if min(y) ≤ 0
-  ```
-  b = -min(y) + eps
-  a = 1
-  ```
-- **Unit interval families** (BE, BEINF, BEO, etc.): Global min-max scaling
-  ```
-  a = 1 / (max(y) - min(y))
-  b = -min(y) * a
-  ```
-- **Real-valued families** (NO, TF, GU): Z-score standardization (same as strict)
-- **Count families** (PO, NBI, ZIP, etc.): Identity (no rounding by default)
-
-**When to use:**
-- Exploratory modeling where you're willing to compare models on transformed scale
-- `group_by_support = FALSE` (testing families across support boundaries)
-- You want to avoid excluding observations due to domain violations
-
-**Example:**
-```r
-ff <- find_families(
-  counts_matrix = counts_matrix,
-  group_by_support = FALSE,
-  transform_mode = "safe",  # Can be omitted (default with group_by_support = FALSE)
-  n_genes = 200,
-  criterion = "BIC"
-)
-```
-
-#### **Comparing Modes on Same Data**
-
-```r
-library(perseo)
-
-# Same data, strict mode
-strict_result <- find_families(
-  counts_matrix = counts_matrix,
-  group_by_support = TRUE,
-  transform_mode = "strict",
-  n_genes = 100,
-  n_boot = 5,
-  criterion = "BIC",
-  seed = 123
-)
-
-# Same data, safe mode
-safe_result <- find_families(
-  counts_matrix = counts_matrix,
-  group_by_support = FALSE,
-  transform_mode = "safe",
-  n_genes = 100,
-  n_boot = 5,
-  criterion = "BIC",
-  seed = 123
-)
-
-# Compare selected families
-strict_result$top_families_overall
-#> [1] "NBI"   "PO"    "ZINBI" "ZIP"
-
-safe_result$top_families_overall
-#> [1] "GG"    "LOGNO" "GA"    "TF"
-
-# Check which mode was used
-strict_result$transform_mode  #> "strict"
-safe_result$transform_mode    #> "safe"
-```
-
-#### **Key Differences**
-
-| Aspect | Strict | Safe |
-|--------|--------|------|
-| **Data modification** | None | Global affine transformation |
-| **Invalid observations** | Excluded (via mask) | Included (after transformation) |
-| **Jacobian correction** | Yes | Yes |
-| **Invertibility** | N/A | Yes (via metadata) |
-| **Use case** | Conservative, support-aware | Exploratory, flexible |
-| **Observation-wise ops** | No | No (only global) |
-| **Default when** | `group_by_support = TRUE` | `group_by_support = FALSE` |
-
-#### **Important Notes**
-
-- Both modes use **Jacobian correction** to ensure ICs are comparable
-- Safe mode **never** applies observation-wise clipping or silent rounding
-- All safe transformations are **global, affine, and invertible**
-- You can explicitly set `transform_mode` regardless of `group_by_support`
-- Transformation metadata is included in output for transparency
 
 ---
 
 ### Step-by-Step Workflow
 
-For fine-grained control, you can call the internal functions directly:
+For fine-grained control, call functions separately. See [`docs/find_families.md`](docs/find_families.md) for detailed family selection documentation.
 
 ```r
-# Step 1: Select families via bootstrap
+# Step 1: Family Selection
 family_results <- find_families(
   counts_matrix = counts_matrix,
   n_genes = 300,
   n_boot = 10,
   top_n = 6,
   criterion = "BIC",
-  min_n = 20,
-  parallel = TRUE,  # Enable parallel processing
-  workers = 8,      # Use 8 cores
   seed = 123
 )
 
@@ -1106,186 +193,594 @@ selected_families <- family_results$top_families_overall
 print(selected_families)
 #> [1] "GG"    "LOGNO" "NBI"   "GA"    "TF"    "NO"
 
-# Step 2: Fit models with selected families
+# Step 2: Differential Expression with selected families
 de_results <- fit_gamlss_models(
   counts_matrix = counts_matrix,
-  design_matrix = design,
+  design_matrix = "~ condition + age + batch",
+  metadata = metadata,
   candidate_families = selected_families,
+  contrast_variable = "condition",
   criterion = "BIC",
-  min_n = 20,
-  p_adjust = "BH",
-  parallel = TRUE,  # Enable parallel processing
-  workers = 8,      # Use 8 cores
-  show_progress = TRUE
-)
-
-# Step 3: Manual global p-value adjustment (optional)
-de_results$results$p_adj_global <- p.adjust(
-  de_results$results$pval,
-  method = "BH"
+  parallel = TRUE,
+  workers = 4
 )
 
 # Access results
-head(de_results$selection)  # Best family per feature
-head(de_results$results)    # Per-term statistics
+head(de_results$results)     # Per-term coefficients
+head(de_results$selection)   # Best family per feature
+head(de_results$contrasts)   # Pairwise contrasts
 ```
+
+---
+
+## Input Specifications
+
+### Required Inputs
+
+**`counts_matrix`**: Numeric matrix (features × samples)
+
+- Rows = features (genes, proteins, metabolites, etc.)
+- Columns = samples
+- Row names = feature identifiers
+- Column names = sample identifiers
+- Values = numeric (finite)
+
+**`design_matrix`**: Model specification (two options)
+
+- **Option 1**: Formula string (e.g., `"~ condition + batch"`)
+- **Option 2**: Pre-built design matrix from `model.matrix()`
+
+**`metadata`**: Data frame with sample metadata (required for formula input or automatic contrasts)
+
+- Row names must match column names of `counts_matrix`
+- Must have columns referenced in formula or `contrast_variable`
+
+---
+
+### Workflow A: Formula + Automatic Contrasts
+
+**When to use**: You want PERSEO to build the design matrix and automatically generate all pairwise contrasts for a categorical variable.
+
+**Requirements**:
+
+- `design_matrix` is a **formula string** or **formula object**
+- `metadata` is provided (data.frame)
+- `contrast_variable` names a column in metadata
+
+**Example**:
+
+```r
+# Prepare metadata
+metadata <- data.frame(
+  sample_id = colnames(counts_matrix),
+  tissue_type = factor(c(rep("Normal", 40), rep("Tumor_A", 30), rep("Tumor_B", 30))),
+  age = rnorm(100, 60, 10),
+  batch = factor(rep(1:4, each = 25)),
+  row.names = colnames(counts_matrix)
+)
+
+# Set reference level
+metadata$tissue_type <- relevel(metadata$tissue_type, ref = "Normal")
+
+# Run with automatic contrast generation
+results <- fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = "~ tissue_type + age + batch",  # formula string
+  metadata = metadata,                             # REQUIRED
+  candidate_families = c("NBI", "GG", "LOGNO"),
+  contrast_variable = "tissue_type",               # auto-generate all pairwise
+  criterion = "BIC",
+  parallel = TRUE,
+  workers = 4
+)
+
+# Automatically generates contrasts:
+# - Tumor_A_vs_Normal
+# - Tumor_B_vs_Normal
+# - Tumor_B_vs_Tumor_A
+
+head(results$contrasts)
+```
+
+**Benefits**:
+
+- Simple and concise
+- No need to manually build design matrix
+- All pairwise contrasts generated automatically
+- Coefficient names match metadata column names
+
+---
+
+### Workflow B: Design Matrix + Manual Contrasts
+
+**When to use**: You need explicit control over the design matrix and want custom contrasts (e.g., average of groups, specific linear combinations).
+
+**Requirements**:
+
+- `design_matrix` is a **numeric matrix** from `model.matrix()`
+- `contrast_matrix` is provided (numeric matrix)
+- Column names of `contrast_matrix` match coefficient names from `design_matrix`
+
+**Example**:
+
+```r
+# Build design matrix manually
+metadata$tissue_type <- relevel(factor(metadata$tissue_type), ref = "Normal")
+design <- model.matrix(~ tissue_type + age + batch, data = metadata)
+
+# Inspect coefficient names
+colnames(design)
+#> [1] "(Intercept)" "tissue_typeTumor_A" "tissue_typeTumor_B" "age" "batch2" "batch3" "batch4"
+
+# Define custom contrast matrix
+C <- matrix(0, nrow = 3, ncol = ncol(design))
+colnames(C) <- colnames(design)
+rownames(C) <- c("Tumor_A_vs_Normal", "Tumor_B_vs_Tumor_A", "AvgTumor_vs_Normal")
+
+# Tumor_A vs Normal (just the Tumor_A coefficient)
+C["Tumor_A_vs_Normal", "tissue_typeTumor_A"] <- 1
+
+# Tumor_B vs Tumor_A (Tumor_B - Tumor_A)
+C["Tumor_B_vs_Tumor_A", "tissue_typeTumor_B"] <- 1
+C["Tumor_B_vs_Tumor_A", "tissue_typeTumor_A"] <- -1
+
+# Average of tumors vs Normal: (Tumor_A + Tumor_B) / 2
+C["AvgTumor_vs_Normal", "tissue_typeTumor_A"] <- 0.5
+C["AvgTumor_vs_Normal", "tissue_typeTumor_B"] <- 0.5
+
+# Run with explicit contrast matrix
+results <- fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = design,                          # pre-built matrix
+  candidate_families = c("NBI", "GG", "LOGNO"),
+  contrast_matrix = C,                             # explicit contrasts
+  criterion = "BIC",
+  parallel = TRUE,
+  workers = 4
+)
+
+head(results$contrasts)
+```
+
+**Benefits**:
+
+- Full control over design matrix construction
+- Custom contrasts (averages, complex combinations)
+- Explicit reference level handling
+- Useful for non-standard designs
+
+---
+
+### Invalid Combinations
+
+**DO NOT**:
+
+```r
+# INVALID: Design matrix + contrast_variable without metadata
+design <- model.matrix(~ condition + batch, data = metadata)
+
+fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = design,              # matrix (not formula)
+  contrast_variable = "condition",     # ERROR: automatic generation not supported
+  candidate_families = c("NBI", "GG")
+)
+# ERROR: When contrast_variable is provided and contrast_matrix is NULL,
+#        design_matrix must be a formula + metadata must be provided.
+```
+
+**DO**:
+
+```r
+# VALID: Use formula + metadata + contrast_variable
+fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = "~ condition + batch",  # formula
+  metadata = metadata,                     # required
+  contrast_variable = "condition",         # OK
+  candidate_families = c("NBI", "GG")
+)
+
+# OR: Use design matrix + explicit contrast_matrix
+C <- matrix(...)
+fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = design,       # matrix
+  contrast_matrix = C,           # explicit
+  candidate_families = c("NBI", "GG")
+)
+```
+
+---
+
+## Advanced Features
+
+### Hierarchical Testing (Omnibus + Contrasts)
+
+For multi-level factors (3+ levels), hierarchical testing reduces multiple testing burden:
+
+1. **Omnibus test**: Does the factor have *any* effect? (multi-df test)
+2. **Contrasts**: Only for features passing omnibus → compute pairwise comparisons
+
+**When to use**:
+
+- Factor has 3+ levels
+- Want stricter false positive control
+- Large datasets (1000+ features)
+
+**When to skip**:
+
+- Factor has only 2 levels (omnibus = single pairwise test)
+- Exploratory analysis (want to see all contrasts)
+- Pre-specified contrasts of interest
+
+**Example**:
+
+```r
+# Multi-level factor
+metadata$tissue_type <- factor(rep(c("Normal", "Luminal", "Basal"), length.out = 100))
+
+results <- fit_gamlss_models(
+  counts_matrix = counts_matrix,
+  design_matrix = "~ tissue_type + age + batch",
+  metadata = metadata,
+  candidate_families = c("NBI", "GG"),
+  contrast_variable = "tissue_type",
+  omnibus = TRUE,                 # Enable hierarchical testing
+  omnibus_threshold = 0.05,       # Filter threshold
+  omnibus_test = "Wald",          # "Wald" (fast) or "LRT" (robust)
+  parallel = TRUE,
+  workers = 4
+)
+
+# View omnibus results
+head(results$omnibus)
+#> # A tibble: 6 × 7
+#>   feature  family test_type statistic    df p_value pass 
+#>   <chr>    <chr>  <chr>         <dbl> <int>   <dbl> <lgl>
+#> 1 Gene_001 NBI    Wald          12.5      2  0.0019 TRUE 
+#> 2 Gene_002 GG     Wald           3.2      2  0.201  FALSE
+#> 3 Gene_003 NBI    Wald          18.7      2  0.0001 TRUE 
+
+# Contrasts only for features passing omnibus
+head(results$contrasts)
+
+# Filter significant contrasts
+sig_contrasts <- results$contrasts %>%
+  filter(p_adj < 0.05)
+```
+
+**Omnibus test comparison**:
+
+| Test | Speed | Best For | Notes |
+|------|-------|----------|-------|
+| **Wald** | Fast | Large samples (n > 30/group), standard families | Uses vcov from fitted model; asymptotic approximation |
+| **LRT** | ~2× slower | Small samples (n < 30/group), complex families | Refits reduced model; more robust |
+
+---
+
+### Transformation Modes
+
+PERSEO supports two transformation strategies:
+
+#### `transform_mode = "strict"` (Default)
+
+**Behavior**:
+
+- Domain-preserving transformations
+- Invalid observations **excluded via masking**
+- No data modification
+- Conservative, support-consistent approach
+
+**When to use**:
+
+- Default for most analyses
+- Domain violations should exclude observations
+- Support-aware family selection
+
+**Example**:
+
+```r
+results <- find_families(
+  counts_matrix = counts_matrix,
+  transform_mode = "strict",  # default
+  group_by_support = TRUE,
+  criterion = "BIC"
+)
+```
+
+#### `transform_mode = "safe"`
+
+**Behavior**:
+
+- Global affine transformations: y* = a·y + b (a > 0)
+- **Invertible** with Jacobian correction
+- No observation exclusion
+- All observations retained after transformation
+
+**When to use**:
+
+- Want more flexibility
+- Testing families across support boundaries
+- Want to avoid observation exclusion
+
+**Example**:
+
+```r
+results <- find_families(
+  counts_matrix = counts_matrix,
+  transform_mode = "safe",
+  group_by_support = FALSE,  # flexible family exploration
+  criterion = "BIC"
+)
+```
+
+**Key differences**:
+
+| Aspect | Strict | Safe |
+|--------|--------|------|
+| **Data modification** | None | Global affine transformation |
+| **Invalid observations** | Excluded | Included (after transform) |
+| **Jacobian correction** | Yes | Yes |
+| **Invertibility** | N/A | Yes (via metadata) |
+| **Use case** | Conservative | Flexibility |
+
+See [`docs/utils_transformations.md`](docs/utils_transformations.md) for technical details.
+
+---
 
 ### Parallel Processing
 
-PERSEO now includes built-in parallel processing support. Simply set `parallel = TRUE`:
+PERSEO includes built-in parallel processing support via `future` backend.
+
+**Automatic mode** (recommended):
 
 ```r
-# Parallel execution with automatic setup
 results <- run_perseo(
   counts_matrix = counts_matrix,
   design_matrix = design,
-  n_genes = 500,
-  n_boot = 20,
-  parallel = TRUE,     # Enable parallel processing
-  workers = 8,         # Optional: specify number of cores
+  parallel = TRUE,     # Auto-configure parallel backend
+  workers = 8,         # Number of cores (auto-detected if NULL)
   verbose = TRUE
 )
 
-# The function automatically:
-# 1. Sets up future::plan(multisession) with specified workers
-# 2. Runs the analysis in parallel
-# 3. Resets to sequential plan on completion
+# Automatically:
+# 1. Sets up future::plan(multisession)
+# 2. Runs analysis in parallel
+# 3. Resets to sequential on completion
 ```
 
-**No manual configuration needed!** The old workflow still works if you prefer:
+**Manual mode** (advanced):
 
 ```r
-# Manual configuration (still supported)
 library(future)
 plan(multisession, workers = 8)
 
 results <- run_perseo(
   counts_matrix = counts_matrix,
-  design_matrix = design,
-  n_genes = 500,
-  n_boot = 20
+  design_matrix = design
 )
 
 plan(sequential)
 ```
 
-**Recommended settings:**
-- **Small datasets** (< 1000 features): `parallel = FALSE` (overhead not worth it)
-- **Medium datasets** (1000-10000 features): `parallel = TRUE, workers = 4-8`
-- **Large datasets** (> 10000 features): `parallel = TRUE, workers = 8-16`
+**Recommended settings**:
 
-**Memory considerations:**
+| Dataset Size | Parallel | Workers |
+|--------------|----------|---------|
+| < 1000 features | `FALSE` | N/A |
+| 1000–10,000 features | `TRUE` | 4–8 |
+| > 10,000 features | `TRUE` | 8–16 |
+
+**Memory considerations**:
+
 - Each worker loads a copy of the data
 - More workers = more memory usage
-- If you encounter memory issues, reduce `workers`
+- If memory issues occur, reduce `workers`
 
 ---
 
-### Custom Family Panel
-
-```r
-# Define custom families
-my_families <- c("PO", "NBI", "ZIP", "ZINBI",  # Count distributions
-                 "GA", "GG", "IG", "LOGNO",    # Positive continuous
-                 "NO", "TF")                    # Real-valued
-
-results <- run_perseo(
-  counts_matrix = counts_matrix,
-  design_matrix = design,
-  families = my_families,
-  n_genes = 200,
-  top_n = 5,
-  criterion = "BIC"
-)
-```
-
----
-
-## Interpretation & Tips
+## Interpretation Guide
 
 ### Understanding Results
 
-**Family Selection**: 
+**Family Selection** (`family_selection`):
+
 - `top_families_overall`: Most frequently selected families across bootstrap samples
-- `freq_table_overall`: How many times each family was selected
-- Higher frequency = more robust/versatile for your dataset
+- `freq_table_overall`: Selection frequency per family
+- Higher frequency → more robust/versatile for your dataset
 
-**Differential Expression**:
-- `results$pval`: Raw p-values from Wald tests
-- `results$padj`: FDR-adjusted p-values (adjusted **by term** across features)
-- `results$effect`: Coefficient on link scale (not directly interpretable as fold-change)
-- `selection$best_family`: Winning family per feature after IC comparison
+**Differential Expression** (`differential_expression$results`):
 
-**Omnibus Testing** (when enabled):
-- `omnibus$p_value`: Feature-level test (does factor have ANY effect?)
-- `omnibus$pass`: Logical flag (TRUE if p_value < omnibus_threshold)
-- `omnibus$test_type`: "Wald" or "LRT"
-- `contrasts`: Only computed for features where `pass == TRUE`
-- Contrast `p_adj` is computed **by contrast** across features (unchanged from standard workflow)
+- `feature`: Feature identifier
+- `term`: Coefficient name (e.g., `conditionTreatment`, `age`, `batch2`)
+- `effect`: Coefficient estimate (on link scale)
+- `se`: Standard error
+- `stat`: Wald statistic (typically t or z)
+- `pval`: Raw p-value
+- `padj`: **FDR-adjusted p-value (by term across features)**
+
+**Selection** (`differential_expression$selection`):
+
+- `feature`: Feature identifier
+- `best_family`: Winning family per feature
+- `n_valid_obs`: Number of observations used (after common mask)
+- `ic_value`: Jacobian-corrected information criterion value
+
+**Contrasts** (`differential_expression$contrasts`):
+
+- `feature`: Feature identifier
+- `family`: Best family for this feature
+- `contrast`: Contrast name (e.g., `Treatment_vs_Control`)
+- `estimate`: Point estimate of linear combination
+- `se`: Standard error
+- `z`: z-statistic
+- `p_value`: Raw p-value
+- `p_adj`: **FDR-adjusted p-value (by contrast across features)**
+
+**Omnibus** (`differential_expression$omnibus`, when enabled):
+
+- `feature`: Feature identifier
+- `family`: Best family
+- `test_type`: `"Wald"` or `"LRT"`
+- `statistic`: Test statistic
+- `df`: Degrees of freedom
+- `p_value`: Omnibus p-value
+- `pass`: Logical; `TRUE` if p_value < omnibus_threshold
 
 ### Multiple Testing Strategy
 
-PERSEO uses a **hierarchical approach** when `omnibus = TRUE`:
+**Standard workflow** (`omnibus = FALSE`):
 
-1. **Stage 1 (Omnibus)**: Test each feature for factor effect
-   - 1 test per feature
-   - Identifies features where factor matters
-   
-2. **Stage 2 (Contrasts)**: Only for significant features, compute pairwise comparisons
-   - Reduces total number of tests
-   - P-values adjusted **by contrast** across features (not by feature)
+- Coefficient p-values adjusted **by term** across features
+- Contrast p-values adjusted **by contrast** across features
+- Each term/contrast treated independently
+
+**Hierarchical workflow** (`omnibus = TRUE`):
+
+1. **Stage 1 (Omnibus)**: Test each feature for factor effect (1 test per feature)
+2. **Stage 2 (Contrasts)**: Only for significant features, compute pairwise tests
 
 **Example**: 500 features, 3-level factor
 
 | Approach | Stage 1 Tests | Stage 2 Tests | Total Tests | Power |
 |----------|--------------|---------------|-------------|-------|
-| Standard (omnibus = FALSE) | 0 | 500 × 3 = 1500 | 1500 | Lower |
-| Hierarchical (omnibus = TRUE) | 500 | 150 × 3 = 450 | 950 | Higher |
+| Standard | 0 | 500 × 3 = 1500 | 1500 | Lower |
+| Hierarchical | 500 | 150 × 3 = 450 | 950 | Higher |
 
-### Recommended Settings
+**Note**: Omnibus test acts only as a **gatekeeper**. Contrast p-values are still adjusted by contrast across features (unchanged from standard workflow).
 
-- **Sample size < 50**: Use `omnibus_test = "LRT"` for robustness
-- **Sample size 50-200**: Use `omnibus_test = "Wald"` (balanced)
-- **Sample size > 200**: Use `omnibus_test = "Wald"` (fast)
-- **2-level factors**: Skip omnibus (`omnibus = FALSE`)
-- **3+ level factors**: Consider omnibus (`omnibus = TRUE`)
-- **Exploratory analysis**: `omnibus = FALSE` (see all contrasts)
-- **Confirmatory analysis**: `omnibus = TRUE` (stricter control)
-- **Bootstrap**: `n_boot = 10-20` usually sufficient; higher for robustness
-- **Sampling**: `n_genes = 200-500` captures diversity without excessive runtime
+### Common Patterns
 
-### Common Pitfalls
+**Filter significant DE results**:
 
-1. **All features skipped**: Check `min_n` - you may need fewer valid observations
-2. **No families selected**: Increase `n_genes` or `n_boot`
-3. **NAs in results**: Normal for some features; check `selection$n_valid_obs`
-4. **Slow runtime**: Use parallelization with `future::plan(multisession)`
+```r
+sig_results <- results$differential_expression$results %>%
+  filter(p_adj < 0.05, grepl("^condition", term)) %>%
+  arrange(p_adj)
+```
+
+**Filter significant contrasts**:
+
+```r
+sig_contrasts <- results$differential_expression$contrasts %>%
+  filter(p_adj < 0.05) %>%
+  arrange(p_adj)
+```
+
+**Check family distribution**:
+
+```r
+table(results$differential_expression$selection$best_family)
+#> GG LOGNO   NBI    GA    TF    NO 
+#> 142    91    64    28     7     2
+```
+
+**Omnibus pass rate**:
+
+```r
+sum(results$differential_expression$omnibus$pass, na.rm = TRUE) / 
+  nrow(results$differential_expression$omnibus) * 100
+#> 32.5% passed omnibus filter
+```
 
 ---
 
-## Troubleshooting
+## FAQ
 
-**Error: "unused argument (binom_bd = ...)"**
-- This parameter is only for `find_families()`, not `fit_gamlss_models()`
+**Q: When should I use `bootstrap = TRUE` vs. `bootstrap = FALSE`?**
 
-**Warning: "No families selected"**
-- Data may be too sparse
-- Try increasing `n_genes` or reducing `min_n`
-- Check for extreme outliers or batch effects
+A: Use `bootstrap = TRUE` (default) for fast exploratory analysis. The bootstrap samples a subset of features to identify common families, then applies them to all features. Use `bootstrap = FALSE` for comprehensive analysis where you want to evaluate all families on all features (slower but thorough).
 
-**Slow performance**
-- Enable parallel processing: `future::plan(multisession, workers = N)`
-- Reduce `n_genes` or `n_boot` for family selection
-- Use `verbose = FALSE` to suppress messages
+**Q: How do I choose between Workflow A and Workflow B?**
 
-**Memory issues**
-- Process features in batches
-- Reduce number of workers
-- Use `criterion = "BIC"` (faster than GAIC)
+A: Use **Workflow A** (formula + automatic contrasts) for simple designs with standard pairwise comparisons. Use **Workflow B** (design matrix + manual contrasts) when you need custom contrasts (e.g., averages, complex linear combinations) or explicit control over reference levels.
+
+**Q: What's the difference between Wald and LRT omnibus tests?**
+
+A: **Wald** is faster (uses vcov from fitted model) and suitable for large samples (n > 30/group). **LRT** is more robust (refits reduced model) and better for small samples (n < 30/group) or complex families. LRT is ~2× slower.
+
+**Q: Why do I get NA values in contrast results?**
+
+A: NAs occur when:
+- Variance-covariance matrix extraction fails
+- Vcov contains non-finite values
+- Model did not converge properly
+
+This is normal for some features; check `selection$n_valid_obs` to ensure sufficient data.
+
+**Q: How do I interpret `effect` values in results?**
+
+A: `effect` is the coefficient estimate on the **link scale** (not directly interpretable as fold-change). For count families (NBI, PO), the link is typically log. For positive families (GG, LOGNO), also log. For interpretation, focus on:
+- Sign (positive/negative effect)
+- Statistical significance (padj)
+- Contrast estimates for direct comparisons
+
+**Q: Can I use PERSEO with non-count data?**
+
+A: Yes! PERSEO supports:
+- **Count data**: RNA-seq counts → NBI, PO, ZIP, ZINBI
+- **Positive continuous**: Proteomics intensities → GG, GA, LOGNO, IG
+- **Unit interval**: Beta values, proportions → BE, BEINF, BEO
+- **Real-valued**: Normalized/transformed data → NO, TF
+
+Use `group_by_support = TRUE` to restrict families by empirical support.
+
+**Q: How do I speed up analysis?**
+
+A: 
+1. Enable parallel processing: `parallel = TRUE, workers = 8`
+2. Use `criterion = "BIC"` (faster than GAIC)
+3. Reduce `n_genes` and `n_boot` for family selection
+4. Use `omnibus_test = "Wald"` (faster than LRT)
+5. Skip omnibus filtering if not needed (`omnibus = FALSE`)
+
+**Q: What if all features are skipped?**
+
+A: Check `min_n` parameter. You may need fewer valid observations. Also check for:
+- Extreme outliers
+- Batch effects
+- Data quality issues
+
+**Q: How are contrast p-values adjusted?**
+
+A: Contrast p-values are adjusted **by contrast** across all features using the specified FDR method (default: BH). Each contrast is treated as an independent hypothesis family. Example:
+- `Treatment_vs_Control`: All features with this contrast are adjusted together
+- `High_vs_Low`: All features with this contrast are adjusted together
+
+This is true regardless of `omnibus` setting. The omnibus test serves only as a gatekeeper, not as part of the adjustment procedure.
 
 ---
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 (GPL-3.0) —
-see the `LICENSE` file for details.
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0) — see the [LICENSE](LICENSE) file for details.
+
+---
+
+## Citation
+
+If you use PERSEO in your research, please cite:
+
+Olmos-Piñero, S. & Fernández-Lanza Val, F.  
+*PERSEO: Flexible differential expression analysis using GAMLSS*.  
+Manuscript in preparation.
+
+---
+
+## Contributing
+
+Contributions are welcome! Please open an issue or pull request on [GitHub](https://github.com/OPSergio/Perseo).
+
+---
+
+## Contact
+
+For questions or support:
+
+- **Issues**: [GitHub Issues](https://github.com/OPSergio/Perseo/issues)
+- **Email**: solmos97@gmail.com
+
+---
+
+**Note**: This package is under active development. API and functionality may change in future versions.

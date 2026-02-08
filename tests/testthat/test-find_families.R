@@ -14,7 +14,7 @@ test_that("find_families works with parallel = TRUE", {
     criterion = "BIC",
     parallel = TRUE,
     workers = 2,
-    verbose = FALSE
+    show_progress = FALSE
   )
   
   expect_true(length(result$top_families_overall) >= 2)  # Changed from == 3
@@ -37,7 +37,7 @@ test_that("find_families cleans up future plan", {
     top_n = 2,
     parallel = TRUE,
     workers = 2,
-    verbose = FALSE
+    show_progress = FALSE
   )
   
   final_plan <- class(future::plan())[1]
@@ -59,7 +59,7 @@ test_that("find_families parallel and sequential give similar results", {
     criterion = "BIC",
     parallel = FALSE,
     seed = 123,
-    verbose = FALSE
+    show_progress = FALSE
   )
   
   result_par <- find_families(
@@ -71,7 +71,7 @@ test_that("find_families parallel and sequential give similar results", {
     parallel = TRUE,
     workers = 2,
     seed = 123,
-    verbose = FALSE
+    show_progress = FALSE
   )
   
   # Both should select the same top families (order may vary)

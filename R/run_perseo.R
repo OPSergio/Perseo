@@ -39,7 +39,7 @@
 #'   If NULL (default), automatically sets to "strict" when group_by_support = TRUE,
 #'   and "safe" when group_by_support = FALSE. Controls transformation behavior for
 #'   both family selection and differential expression.
-#' @param verbose Logical, print progress messages (default: TRUE).
+#' @param show_progress Logical, show progress messages and reports (default: TRUE).
 #' @param seed Integer or NULL, random seed for reproducibility (default: NULL).
 #'
 #' @return List with three components:
@@ -62,9 +62,9 @@
 #' 3. **Multiple Testing Correction**: Adjusts p-values globally across all features
 #'    and terms using the specified method (default: Benjamini-Hochberg FDR).
 #'
-#' **Verbosity Control:**
-#' - `verbose = TRUE`: Prints progress for both family selection and model fitting.
-#' - `verbose = FALSE`: Suppresses all informational messages (errors still shown).
+#' **Progress Control:**
+#' - `show_progress = TRUE`: Shows progress messages and reports for both family selection and model fitting.
+#' - `show_progress = FALSE`: Suppresses all informational messages (errors still shown).
 #'
 #' **P-value Adjustment:**
 #' Applied globally across all features and model terms. The `p_adjust_method`
@@ -88,7 +88,7 @@
 #'   top_n = 4,
 #'   criterion = "BIC",
 #'   p_adjust_method = "BH",
-#'   verbose = TRUE,
+#'   show_progress = TRUE,
 #'   seed = 12345
 #' )
 #'
@@ -143,7 +143,7 @@ run_perseo <- function(counts_matrix,
                        filter_beta_inflated = TRUE,
                        p_adjust_method = "BH",
                        transform_mode = NULL,
-                       verbose = TRUE,
+                       show_progress = TRUE,
                        seed = NULL) {
   
   # ---- Argument validation ----
@@ -157,7 +157,7 @@ run_perseo <- function(counts_matrix,
   }
   
   # ---- Step 1: Family Selection ----
-  if (verbose) {
+  if (show_progress) {
     message("\n", strrep("=", 70))
     message(" PERSEO Pipeline - Step 1: Family Selection")
     message(strrep("=", 70))
@@ -170,7 +170,7 @@ run_perseo <- function(counts_matrix,
     n_boot = n_boot,
     top_n = top_n,
     families = families,
-    verbose = verbose,
+    show_progress = show_progress,
     min_n = min_n,
     seed = seed,
     group_by_support = group_by_support,
@@ -203,12 +203,12 @@ run_perseo <- function(counts_matrix,
     ))
   }
   
-  if (verbose) {
+  if (show_progress) {
     message("\nSelected families (top ", top_n, "): ", paste(selected_families, collapse = ", "))
   }
   
   # ---- Step 2: Differential Expression ----
-  if (verbose) {
+  if (show_progress) {
     message("\n", strrep("=", 70))
     message(" PERSEO Pipeline - Step 2: Differential Expression")
     message(strrep("=", 70))
@@ -223,11 +223,12 @@ run_perseo <- function(counts_matrix,
     min_n = min_n,
     contrast_matrix = contrast_matrix,
     p_adjust = "none",  # We'll do global adjustment below
+    show_progress = show_progress,
     transform_mode = family_results$transform_mode
   )
   
   # ---- Step 3: Multiple Testing Correction ----
-  if (verbose) {
+  if (show_progress) {
     message("\n", strrep("=", 70))
     message(" PERSEO Pipeline - Step 3: Multiple Testing Correction")
     message(strrep("=", 70))
@@ -245,7 +246,7 @@ run_perseo <- function(counts_matrix,
     # Add to results
     de_results$results$p_adj <- p_adjusted
     
-    if (verbose) {
+    if (show_progress) {
       n_sig_raw <- sum(p_values < 0.05, na.rm = TRUE)
       n_sig_adj <- sum(p_adjusted < 0.05, na.rm = TRUE)
       message(sprintf(
@@ -254,7 +255,7 @@ run_perseo <- function(counts_matrix,
       ))
     }
   } else {
-    if (verbose) {
+    if (show_progress) {
       message("No models fitted successfully.")
     }
   }
@@ -265,7 +266,7 @@ run_perseo <- function(counts_matrix,
     p_adjusted_contrasts <- stats::p.adjust(p_values_contrasts, method = p_adjust_method)
     de_results$contrasts$p_adj <- p_adjusted_contrasts
     
-    if (verbose) {
+    if (show_progress) {
       n_sig_raw_c <- sum(p_values_contrasts < 0.05, na.rm = TRUE)
       n_sig_adj_c <- sum(p_adjusted_contrasts < 0.05, na.rm = TRUE)
       message(sprintf(
@@ -296,7 +297,7 @@ run_perseo <- function(counts_matrix,
     status = "completed"
   )
   
-  if (verbose) {
+  if (show_progress) {
     message("\n", strrep("=", 70))
     message(" PERSEO Pipeline - Completed Successfully")
     message(strrep("=", 70))

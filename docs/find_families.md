@@ -2,7 +2,20 @@
 
 ## Overview
 
-`find_families()` performs automated distribution family selection for high-dimensional omics data using bootstrap sampling and information criterion comparison. The function evaluates intercept-only GAMLSS models across candidate families, applying Jacobian-corrected information criteria and common masking to ensure valid cross-family comparisons.
+`find_families()` performs automated distribution family selection for high-dimensional omics data using bootstrap sampling and information criterion comparison. The function evaluates **intercept-only** GAMLSS models across candidate families, applying Jacobian-corrected information criteria and common masking to ensure valid cross-family comparisons.
+
+## Workflow Context
+
+`find_families()` is **Step 1** in the PERSEO pipeline:
+
+1. **`find_families()`**: Identify frequently selected families on a representative subset of features
+2. **`fit_gamlss_models()`**: Apply selected families to all features with full regression models (covariates + contrasts)
+
+> **Important**: `find_families()` uses **intercept-only models** (no covariates) to identify robust families. The selected families are then used in `fit_gamlss_models()` with the full design matrix. See the main [README](../README.md) for complete workflows.
+
+**For differential expression analysis**, see:
+- [README - Workflow A: Formula + Automatic Contrasts](../README.md#workflow-a-formula--automatic-contrasts)
+- [README - Workflow B: Design Matrix + Manual Contrasts](../README.md#workflow-b-design-matrix--manual-contrasts)
 
 ## Statistical Framework
 
@@ -462,23 +475,61 @@ Not currently parallelized within `find_families()`. For large datasets:
 ### Integration Example
 
 ```r
-# Step 1: Family selection
+# Step 1: Family selection (intercept-only models)
 ff <- find_families(
   counts_matrix = counts,
   n_genes = 200,
   n_boot = 10,
-  criterion = "BIC"
+  criterion = "BIC",
+  seed = 123
 )
 
-# Step 2: Differential expression with selected families
+# Examine selected families
+ff$top_families_overall
+#> [1] "GG"    "LOGNO" "NBI"   "GA"
+
+# Step 2: Differential expression with selected families and covariates
+# WORKFLOW A: Formula + automatic contrasts
 de_results <- fit_gamlss_models(
   counts_matrix = counts,
-  design_matrix = design,
-  candidate_families = ff$top_families_overall,
+  design_matrix = "~ condition + age + batch",  # formula with covariates
+  metadata = metadata,                           # required for formula
+  candidate_families = ff$top_families_overall,  # use selected families
+  contrast_variable = "condition",               # auto-generate contrasts
   criterion = "BIC",
-  transform_mode = ff$transform_mode  # Use same mode
+  transform_mode = ff$transform_mode,            # use same transform mode
+  parallel = TRUE,
+  workers = 4
 )
+
+# OR WORKFLOW B: Design matrix + manual contrasts
+design <- model.matrix(~ condition + age + batch, data = metadata)
+C <- matrix(...)  # custom contrast matrix
+colnames(C) <- colnames(design)
+
+de_results <- fit_gamlss_models(
+  counts_matrix = counts,
+  design_matrix = design,                        # pre-built matrix
+  candidate_families = ff$top_families_overall,  # use selected families
+  contrast_matrix = C,                           # explicit contrasts
+  criterion = "BIC",
+  transform_mode = ff$transform_mode,
+  parallel = TRUE,
+  workers = 4
+)
+
+# Access results
+head(de_results$results)     # coefficient statistics
+head(de_results$contrasts)   # contrast results
+head(de_results$selection)   # best family per feature
 ```
+
+**Key Points**:
+- `find_families()` uses **intercept-only models** to identify robust families
+- `fit_gamlss_models()` uses **full regression models** with covariates
+- Same families are tested, but with added complexity (covariates)
+- Use same `transform_mode` in both steps for consistency
+- See [README](../README.md) for complete workflow documentation
 
 ---
 
@@ -518,29 +569,35 @@ When `group_by_support = TRUE`:
 
 ## Limitations and Caveats
 
-1. **Intercept-only models**: Does not account for covariate effects
-   - Selection based on marginal distributions
-   - Covariate-response relationships not considered
-   - Best family may differ with design matrix inclusion
+1. **Intercept-only models**: Selection based on marginal distributions
+   - Does not account for covariate effects
+   - Best family may differ when covariates are included
+   - This is intentional: identifies robust families across diverse features
+   - Full regression happens in `fit_gamlss_models()` with the selected families
+   - **Rationale**: Marginal family selection avoids overfitting to specific covariate structures
 
 2. **Bootstrap sampling**: 
    - Assumes features are exchangeable within support
    - May undersample rare feature types
    - Frequency estimates have sampling variability
+   - Use `bootstrap = FALSE` in `run_perseo()` for comprehensive evaluation
 
 3. **Common mask**:
    - Can reduce effective sample size substantially
    - May exclude features with many boundary values
-   - Bias toward families with less restrictive domains (when strict mode)
+   - Bias toward families with less restrictive domains (in strict mode)
+   - Ensures valid IC comparisons (all families on same observations)
 
 4. **IC limitations**:
    - Asymptotic approximations (may be inaccurate for small `n_valid`)
    - Assumes correct model specification within family
    - Does not account for model misspecification uncertainty
+   - Relative comparison (not absolute quality measure)
 
 5. **Computational cost**:
-   - Scales with `n_boot × n_genes × n_families`
+   - Scales as O(`n_boot` × `n_genes` × `n_families`)
    - Large family panels may be slow without parallelization
+   - Use `parallel = TRUE` in `run_perseo()` for automatic parallelization
 
 ---
 

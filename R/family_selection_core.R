@@ -146,7 +146,7 @@ compare_families_on_feature <- function(feature_vec,
   
   coef_tbls <- lapply(seq_along(effective_families), function(i) {
     if (valid_results[i] && !is.null(fits[[i]])) {
-      extract_mu_coefficients(fits[[i]])
+      extract_coef_fn(fits[[i]])
     } else {
       tibble::tibble(term = character(), effect = numeric(), se = numeric(), stat = numeric(), pval = numeric())
     }
@@ -197,11 +197,17 @@ compare_families_with_design <- function(feature_vec,
                                          gaic_k = NULL,
                                          min_n = 5,
                                          bd_vec = NULL,
-                                         transform_mode = "strict") {
+                                         transform_mode = "strict",
+                                         extract_coef_fn = NULL) {
   y <- feature_vec
   candidate_families <- families
   design_matrix <- design_df
   complete_rows <- stats::complete.cases(design_matrix)
+  
+  # Use default extractor if not provided
+  if (is.null(extract_coef_fn)) {
+    extract_coef_fn <- extract_mu_coefficients
+  }
   
   # Transform with all candidate families
   transforms <- stats::setNames(
@@ -296,7 +302,7 @@ compare_families_with_design <- function(feature_vec,
   
   coef_tbls <- lapply(seq_along(candidate_families), function(i) {
     if (valid_results[i] && !is.null(fits[[i]])) {
-      extract_mu_coefficients(fits[[i]])
+      extract_coef_fn(fits[[i]])
     } else {
       tibble::tibble(term = character(), effect = numeric(), se = numeric(), stat = numeric(), pval = numeric())
     }
@@ -376,11 +382,11 @@ bind_bootstrap_results <- function(results_list) {
 #'
 #' @param sampled_results Tibble with bootstrap results (from `bind_bootstrap_results()`).
 #' @param top_n Integer number of top families to return.
-#' @param verbose Logical; print summary report if TRUE.
+#' @param show_progress Logical; print summary report if TRUE.
 #'
 #' @return List with frequency tables, proportions, and top families.
 #' @keywords internal
-summarize_family_frequencies <- function(sampled_results, top_n, verbose = FALSE) {
+summarize_family_frequencies <- function(sampled_results, top_n, show_progress = FALSE) {
   fitted <- sampled_results %>%
     dplyr::filter(!is.na(.data$family), !.data$skipped)
 
@@ -412,8 +418,8 @@ summarize_family_frequencies <- function(sampled_results, top_n, verbose = FALSE
     names(head(tab, top_n))
   })
 
-  # Enhanced verbose reporting
-  if (isTRUE(verbose)) {
+  # Enhanced progress reporting
+  if (isTRUE(show_progress)) {
     n_boot <- max(sampled_results$bootstrap, na.rm = TRUE)
     n_genes <- nrow(sampled_results) / n_boot
     n_total_eval <- nrow(sampled_results)

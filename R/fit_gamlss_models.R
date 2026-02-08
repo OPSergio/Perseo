@@ -1,239 +1,291 @@
-#' Apply linear contrasts to GAMLSS mu coefficients
-#'
-#' Computes estimates, standard errors, z-statistics and p-values for arbitrary
-#' linear contrasts of mu-parameter coefficients from a fitted GAMLSS model.
-#'
-#' @param beta Named numeric vector of coefficients from `coef(fit, what = "mu")`.
-#' @param V Covariance matrix from `vcov(fit, what = "mu")`.
-#' @param C Contrast matrix where each row defines a linear combination.
-#'   Column names must match (a subset of) `names(beta)`.
-#'
-#' @return A tibble with columns:
-#'   \describe{
-#'     \item{contrast}{Contrast name (from rownames(C))}
-#'     \item{estimate}{Point estimate (C times beta)}
-#'     \item{se}{Standard error}
-#'     \item{z}{z-statistic}
-#'     \item{p_value}{Two-sided p-value}
-#'   }
-#'
-#' @details Missing columns in C are filled with 0; extra columns in C not in
-#' beta are dropped. If vcov is not positive definite or contains NAs/Infs,
-#' all statistics are returned as NA.
-#'
-#' @keywords internal
-apply_contrasts <- function(beta, V, C) {
-  # Validate inputs
-  if (!is.numeric(beta) || is.null(names(beta))) {
-    stop("beta must be a named numeric vector")
-  }
-  if (!is.matrix(V) || nrow(V) != ncol(V) || nrow(V) != length(beta)) {
-    stop("V must be a square matrix with nrow = length(beta)")
-  }
-  if (!is.matrix(C) || ncol(C) == 0) {
-    stop("C must be a numeric matrix with at least one column")
-  }
-  
-  # Check for non-finite values in V
-  if (any(!is.finite(V))) {
-    warning("vcov contains non-finite values; returning NA contrasts")
-    contrast_names <- if (!is.null(rownames(C))) {
-      rownames(C)
-    } else {
-      paste0("contrast_", seq_len(nrow(C)))
-    }
-    return(tibble::tibble(
-      contrast = contrast_names,
-      estimate = NA_real_,
-      se = NA_real_,
-      z = NA_real_,
-      p_value = NA_real_
-    ))
-  }
-  
-  # Align C columns to beta names
-  beta_names <- names(beta)
-  C_names <- colnames(C)
-  
-  if (is.null(C_names)) {
-    stop("C must have column names matching coefficient names")
-  }
-  
-  # Create aligned contrast matrix: rows = contrasts, cols = beta_names
-  C_aligned <- matrix(0, nrow = nrow(C), ncol = length(beta_names))
-  colnames(C_aligned) <- beta_names
-  rownames(C_aligned) <- rownames(C)
-  
-  # Fill in values where columns match
-  matched_cols <- intersect(C_names, beta_names)
-  if (length(matched_cols) == 0) {
-    warning("No contrast matrix columns match coefficient names; returning NA")
-    contrast_names <- if (!is.null(rownames(C))) {
-      rownames(C)
-    } else {
-      paste0("contrast_", seq_len(nrow(C)))
-    }
-    return(tibble::tibble(
-      contrast = contrast_names,
-      estimate = NA_real_,
-      se = NA_real_,
-      z = NA_real_,
-      p_value = NA_real_
-    ))
-  }
-  
-  for (col in matched_cols) {
-    C_aligned[, col] <- C[, col]
-  }
-  
-  # Compute contrasts
-  estimates <- as.numeric(C_aligned %*% beta)
-  variances <- diag(C_aligned %*% V %*% t(C_aligned))
-  
-  # Ensure non-negative variances
-  variances <- pmax(variances, 0)
-  ses <- sqrt(variances)
-  
-  z_values <- estimates / ses
-  p_values <- 2 * pnorm(abs(z_values), lower.tail = FALSE)
-  
-  contrast_names <- if (!is.null(rownames(C))) {
-    rownames(C)
-  } else {
-    paste0("contrast_", seq_len(nrow(C)))
-  }
-  
-  tibble::tibble(
-    contrast = contrast_names,
-    estimate = unname(estimates),
-    se = unname(ses),
-    z = unname(z_values),
-    p_value = unname(p_values)
-  )
-}
-
-
 #' Fit GAMLSS models per feature (family selection with common mask + Jacobian)
 #'
 #' Compares candidate GAMLSS families per feature on the same set of observations
-#' (common mask), using family-specific transformations and Jacobian
-#' correction for fair IC comparison. Selects the best family by GAIC/BIC/AIC and
-#' returns per-term statistics from `summary(fit, what = "mu")`.
+#' (common mask), using family-specific transformations and Jacobian correction 
+#' for fair IC comparison. Selects the best family by GAIC/BIC/AIC and returns 
+#' per-term statistics from `summary(fit, what = "mu")`.
 #'
-#' @param counts_matrix numeric matrix (features x samples).
-#' @param design_matrix data.frame or matrix of covariates with
-#'   `nrow = ncol(counts_matrix)`. Can also be a formula string (e.g., "~ condition + batch")
-#'   in which case the design matrix is created internally from the metadata.
-#' @param metadata optional data.frame with sample metadata. Required when
-#'   `design_matrix` is a formula string or when using `contrast_variable`.
-#'   Must have `nrow = ncol(counts_matrix)`.
-#' @param candidate_families character vector of GAMLSS families to test
-#'   (e.g. `c("PO","NBI","GA","GG","IG","LOGNO","NO","TF")`).
-#' @param criterion one of `"GAIC"`, `"BIC"`, or `"AIC"`; default `"GAIC"`.
-#' @param gaic_k numeric penalty used when `criterion = "GAIC"`. If `NULL`,
-#'   uses `log(n_valid_obs)`.
-#' @param min_n integer minimum number of valid observations after applying the
-#'   common mask; features below this threshold are skipped. Default `5`.
-#' @param p_adjust method passed to `p.adjust()` to compute FDR per term across
-#'   features (default `"BH"`).
-#' @param contrast_matrix optional numeric matrix where each row defines a linear
-#'   combination of mu coefficients. Column names must match coefficient names
-#'   from the design matrix. If provided, contrasts are computed from vcov after
-#'   model fitting.
-#' @param contrast_variable optional character string specifying a categorical variable
-#'   name from the metadata for which all pairwise contrasts should be computed.
-#'   If both `contrast_matrix` and `contrast_variable` are provided, `contrast_matrix`
-#'   takes priority with a warning message.
-#' @param omnibus logical; if `TRUE` and contrasts are requested, performs a feature-level
-#'   omnibus test first and only computes contrasts for features passing the test.
-#'   This implements a hierarchical testing strategy (omnibus → post-hoc). Default `FALSE`.
-#' @param omnibus_threshold numeric; significance threshold for omnibus test. Features with
-#'   omnibus p-value > this threshold will not have contrasts computed. Only used when
-#'   `omnibus = TRUE`. Default `0.05`.
-#' @param omnibus_test character; type of omnibus test. Either `"Wald"` (multi-df Wald test,
-#'   faster, uses existing vcov) or `"LRT"` (likelihood ratio test, more robust, requires
-#'   refitting reduced model). Default `"Wald"`.
-#' @param workers integer number of parallel workers. Only used when `parallel = TRUE`.
-#'   If `NULL`, uses `future::availableCores() - 1`. Default `NULL`.
-#' @param parallel logical; enable parallel processing via `future::plan(multisession)`.
-#'   When `TRUE`, automatically configures and cleans up the future backend.
-#'   Default `FALSE`.
-#' @param show_progress logical; show a `progressr` progress bar. Default `TRUE`.
-#' @param progress_label character label shown next to the progress bar.
-#' @param transform_mode character: "strict" (default) or "safe". Transformation mode
-#'   for family comparison. "strict" enforces domain-preserving transformations with
-#'   observation exclusion. "safe" applies global affine transformations to fit data
-#'   into family domain (invertible with Jacobian correction).
+#' @section Input Workflows:
+#' 
+#' \strong{Workflow A: Formula + Metadata + Automatic Contrasts}
+#' 
+#' When you want PERSEO to build the design matrix and automatically generate 
+#' pairwise contrasts:
+#' 
+#' \preformatted{
+#' fit_gamlss_models(
+#'   counts_matrix = counts,
+#'   design_matrix = "~ condition + batch",  # formula string
+#'   metadata = metadata,                     # REQUIRED
+#'   candidate_families = c("NBI", "GG"),
+#'   contrast_variable = "condition"          # auto-generate contrasts
+#' )
+#' }
+#' 
+#' \strong{Requirements:}
+#' \itemize{
+#'   \item \code{design_matrix} MUST be a formula (string or formula object)
+#'   \item \code{metadata} MUST be provided (data.frame with nrow = ncol(counts_matrix))
+#'   \item \code{contrast_variable} names a column in metadata
+#'   \item Row names of metadata should match column names of counts_matrix
+#' }
+#' 
+#' \strong{Workflow B: Design Matrix + Manual Contrasts}
+#' 
+#' When you have a pre-built design matrix and want explicit control over contrasts:
+#' 
+#' \preformatted{
+#' design <- model.matrix(~ condition + batch, data = metadata)
+#' C <- matrix(...)  # Custom contrast matrix
+#' colnames(C) <- colnames(design)
+#' 
+#' fit_gamlss_models(
+#'   counts_matrix = counts,
+#'   design_matrix = design,        # pre-built matrix
+#'   candidate_families = c("NBI", "GG"),
+#'   contrast_matrix = C             # REQUIRED for contrasts
+#' )
+#' }
+#' 
+#' \strong{Requirements:}
+#' \itemize{
+#'   \item \code{design_matrix} is a numeric matrix (nrow = ncol(counts_matrix))
+#'   \item If contrasts are needed, \code{contrast_matrix} MUST be provided
+#'   \item \code{contrast_variable} is NOT allowed (automatic generation not supported)
+#'   \item Column names of contrast_matrix must match coefficient names
+#' }
+#' 
+#' \strong{Invalid Combinations:}
+#' \itemize{
+#'   \item design_matrix = matrix + contrast_variable (without metadata)
+#'   \item Automatic contrast generation requires formula + metadata
+#' }
+#'
+#' @param counts_matrix Numeric matrix (features × samples). Feature IDs in row names, 
+#'   sample IDs in column names.
+#' @param design_matrix Either:
+#'   \itemize{
+#'     \item A formula string (e.g., \code{"~ condition + batch"}) - requires \code{metadata}
+#'     \item A formula object - requires \code{metadata}
+#'     \item A pre-built model matrix from \code{model.matrix()} with nrow = ncol(counts_matrix)
+#'   }
+#' @param metadata Data.frame with sample metadata. Required when:
+#'   \itemize{
+#'     \item \code{design_matrix} is a formula (string or object), OR
+#'     \item Using \code{contrast_variable} for automatic contrast generation
+#'   }
+#'   Must have \code{nrow = ncol(counts_matrix)}. Row names should match column 
+#'   names of counts_matrix for proper alignment.
+#' @param candidate_families Character vector of GAMLSS families to test
+#'   (e.g., \code{c("PO","NBI","GA","GG","IG","LOGNO","NO","TF")}).
+#' @param criterion Model selection criterion: \code{"GAIC"}, \code{"BIC"}, or 
+#'   \code{"AIC"}. Default \code{"GAIC"}.
+#' @param gaic_k Numeric penalty for GAIC. If \code{NULL}, uses \code{log(n_valid_obs)} 
+#'   (equivalent to BIC). Ignored if \code{criterion != "GAIC"}.
+#' @param min_n Integer minimum number of valid observations after common mask. 
+#'   Features below this threshold are skipped. Default \code{5}.
+#' @param p_adjust Method passed to \code{p.adjust()} to compute FDR per term 
+#'   across features. Default \code{"BH"}.
+#' @param contrast_matrix Numeric matrix where each row defines a linear combination 
+#'   of mu coefficients. Column names must match coefficient names from design matrix. 
+#'   Use this for custom contrasts with pre-built design matrices (Workflow B). 
+#'   Mutually exclusive with \code{contrast_variable}.
+#' @param contrast_variable Character string naming a categorical variable in 
+#'   \code{metadata} for automatic pairwise contrast generation. Only valid with 
+#'   formula-based design (Workflow A). Requires \code{metadata}. Mutually 
+#'   exclusive with \code{contrast_matrix}.
+#' @param omnibus Logical; if \code{TRUE} and contrasts are requested, performs a 
+#'   feature-level omnibus test before computing contrasts. Only features passing 
+#'   the omnibus test (p < \code{omnibus_threshold}) will have contrasts computed. 
+#'   This implements hierarchical testing (omnibus → post-hoc). Default \code{FALSE}.
+#' @param omnibus_threshold Numeric; significance threshold for omnibus test. 
+#'   Default \code{0.05}.
+#' @param omnibus_test Character; type of omnibus test: \code{"Wald"} (fast, uses 
+#'   vcov from fitted model) or \code{"LRT"} (robust, refits reduced model). 
+#'   Default \code{"Wald"}.
+#' @param workers Integer number of parallel workers. Only used when 
+#'   \code{parallel = TRUE}. If \code{NULL}, uses \code{future::availableCores() - 1}. 
+#'   Default \code{NULL}.
+#' @param parallel Logical; enable parallel processing via \code{future::plan(multisession)}. 
+#'   When \code{TRUE}, automatically configures and cleans up the future backend. 
+#'   Default \code{FALSE}.
+#' @param show_progress Logical; show progress messages and final report. 
+#'   Default \code{TRUE}.
+#' @param progress_label Character label for progress bar.
+#' @param transform_mode Character: \code{"strict"} (default) or \code{"safe"}. 
+#'   Transformation mode for family comparison. See Details.
 #'
 #' @return A list with:
 #'   \describe{
-#'     \item{results}{tibble with columns: feature, term, effect, se,
-#'       stat, pval, padj.}
-#'     \item{selection}{tibble with columns: feature, best_family,
-#'       n_valid_obs, ic_value (Jacobian-corrected IC), transform_mode.}
-#'     \item{omnibus}{tibble with columns: feature, family, test_type, statistic,
-#'       df, p_value, pass. Only present when `omnibus = TRUE` and contrasts are requested.}
-#'     \item{contrasts}{tibble with columns: feature, family, contrast,
-#'       estimate, se, z, p_value, p_adj. Only present if
-#'       contrast_matrix or contrast_variable is provided. When `omnibus = TRUE`,
-#'       only includes features passing the omnibus test.}
+#'     \item{results}{Tibble with one row per feature × coefficient. Columns: feature, 
+#'       term, effect, se, stat, pval, padj. FDR adjustment (padj) is performed 
+#'       \strong{by term} across all features.}
+#'     \item{selection}{Tibble with one row per feature. Columns: feature, best_family, 
+#'       n_valid_obs, ic_value (Jacobian-corrected), transform_mode.}
+#'     \item{omnibus}{(Optional) Tibble with omnibus test results. Only present when 
+#'       \code{omnibus = TRUE} and contrasts are requested. Columns: feature, family, 
+#'       test_type, statistic, df, p_value, pass.}
+#'     \item{contrasts}{(Optional) Tibble with contrast results. Only present if 
+#'       \code{contrast_matrix} or \code{contrast_variable} is provided. Columns: 
+#'       feature, family, contrast, estimate, se, z, p_value, p_adj. FDR adjustment 
+#'       (p_adj) is performed \strong{by contrast} across features. When 
+#'       \code{omnibus = TRUE}, only includes features where \code{omnibus$pass == TRUE}.}
 #'   }
 #'
-#' @details Family comparison uses transformations (strict or safe), a common mask
-#' across families, and Jacobian correction so ICs are comparable on the original
-#' data scale. Coefficients/p-values are taken from `summary(., what = "mu")`.
-#'
-#' When contrasts are requested with `omnibus = TRUE`, the function performs hierarchical
-#' testing:
-#' \enumerate{
-#'   \item Fit full model per feature
-#'   \item Perform omnibus test for target factor (Wald or LRT)
-#'   \item Only compute pairwise contrasts for features passing omnibus test
+#' @details
+#' 
+#' \subsection{Model Selection Strategy}{
+#'   For each feature, PERSEO fits all candidate families on the \strong{same 
+#'   observations} (common mask) using family-specific transformations and Jacobian 
+#'   correction. This ensures information criteria (BIC/AIC/GAIC) are comparable 
+#'   across families on the original data scale. The best family is selected per 
+#'   feature, and coefficient statistics are extracted from \code{summary(fit, what = "mu")}.
 #' }
-#'
-#' This mirrors ANOVA + post-hoc workflow and reduces multiple testing burden.
-#'
-#' **Important**: The omnibus test serves only as a gatekeeper. Contrast p-values are
-#' adjusted exactly as before: `group_by(contrast)` across features. The omnibus p-value
-#' is NOT used in contrast adjustment.
-#'
-#' When `omnibus = FALSE` (default), behavior is identical to previous PERSEO versions.
-#'
-#' When `parallel = TRUE`, the function automatically sets up `future::plan(multisession)`
-#' with the specified number of workers and resets to sequential after completion.
+#' 
+#' \subsection{Transformation Modes}{
+#'   \describe{
+#'     \item{\strong{strict}}{(Default) Domain-preserving transformations. Invalid 
+#'       observations are excluded via masking. Conservative approach that respects 
+#'       theoretical support constraints.}
+#'     \item{\strong{safe}}{Global affine transformations (y* = a·y + b) that are 
+#'       invertible with Jacobian correction. No observation exclusion. Useful for 
+#'       exploratory analysis across support boundaries.}
+#'   }
+#' }
+#' 
+#' \subsection{Hierarchical Testing (Omnibus + Contrasts)}{
+#'   When \code{omnibus = TRUE} and contrasts are requested, the function implements 
+#'   a two-stage hierarchical testing strategy:
+#'   \enumerate{
+#'     \item \strong{Omnibus Test}: For each feature, test whether the target factor 
+#'       has \emph{any} effect (multi-df test).
+#'     \item \strong{Contrasts}: Only for features passing the omnibus test 
+#'       (p < \code{omnibus_threshold}), compute pairwise contrasts.
+#'   }
+#'   
+#'   This mirrors the ANOVA + post-hoc workflow and reduces the multiple testing 
+#'   burden, increasing power to detect specific pairwise differences.
+#'   
+#'   \strong{Important}: The omnibus test acts only as a gatekeeper. Contrast p-values 
+#'   are still adjusted \strong{by contrast} across features using the standard 
+#'   FDR procedure (\code{group_by(contrast) |> mutate(p_adj = p.adjust(p_value))}). 
+#'   The omnibus p-value is NOT incorporated into contrast adjustment.
+#'   
+#'   When \code{omnibus = FALSE} (default), all features receive contrast computations 
+#'   without filtering.
+#' }
+#' 
+#' \subsection{Omnibus Test Options}{
+#'   \describe{
+#'     \item{\strong{Wald}}{(Default) Fast multi-df Wald test using variance-covariance 
+#'       matrix: W = β'V⁻¹β ~ χ²(df). No model refitting required. Best for large 
+#'       samples (n > 30/group) and standard families.}
+#'     \item{\strong{LRT}}{Likelihood ratio test requiring reduced model refit: 
+#'       LRT = 2(logLik_full - logLik_reduced) ~ χ²(df). More robust, especially 
+#'       for small samples (n < 30/group) or complex families. Approximately 2× 
+#'       slower than Wald.}
+#'   }
+#' }
+#' 
+#' \subsection{Parallel Processing}{
+#'   When \code{parallel = TRUE}, the function automatically configures 
+#'   \code{future::plan(multisession)} with the specified number of workers and 
+#'   resets to sequential plan upon completion. No manual setup required.
+#' }
 #'
 #' @examples
 #' \dontrun{
-#' # Standard workflow (no omnibus filtering)
-#' fit <- fit_gamlss_models(
-#'   counts_matrix, design, c("NBI","GG"),
-#'   metadata = meta,
-#'   contrast_variable = "tissue_type"
+#' # ============================================================================
+#' # Workflow A: Formula + Metadata + Automatic Contrasts
+#' # ============================================================================
+#' 
+#' # Prepare data
+#' metadata <- data.frame(
+#'   sample_id = colnames(counts_matrix),
+#'   tissue_type = factor(c(rep("Normal", 50), rep("Tumor", 50))),
+#'   age = rnorm(100, 60, 10),
+#'   batch = factor(rep(1:4, each = 25))
 #' )
-#'
-#' # With omnibus filtering (Wald test)
-#' fit <- fit_gamlss_models(
-#'   counts_matrix, design, c("NBI","GG"),
-#'   metadata = meta,
+#' 
+#' # Simple: formula + auto-contrasts
+#' fit_auto <- fit_gamlss_models(
+#'   counts_matrix = counts_matrix,
+#'   design_matrix = "~ tissue_type + age + batch",  # formula string
+#'   metadata = metadata,                             # REQUIRED
+#'   candidate_families = c("NBI", "GG", "LOGNO"),
+#'   contrast_variable = "tissue_type",               # auto-generate all pairwise
+#'   criterion = "BIC",
+#'   parallel = TRUE,
+#'   workers = 4
+#' )
+#' 
+#' # View results
+#' head(fit_auto$results)    # Coefficient statistics
+#' head(fit_auto$selection)  # Best family per feature
+#' head(fit_auto$contrasts)  # Pairwise contrasts (auto-generated)
+#' 
+#' # ============================================================================
+#' # Workflow B: Design Matrix + Manual Contrasts
+#' # ============================================================================
+#' 
+#' # Build design matrix manually
+#' metadata$tissue_type <- relevel(metadata$tissue_type, ref = "Normal")
+#' design <- model.matrix(~ tissue_type + age + batch, data = metadata)
+#' 
+#' # Define custom contrast matrix
+#' C <- matrix(0, nrow = 1, ncol = ncol(design))
+#' colnames(C) <- colnames(design)
+#' rownames(C) <- "Tumor_vs_Normal"
+#' C["Tumor_vs_Normal", "tissue_typeTumor"] <- 1
+#' 
+#' # Fit with explicit contrast matrix
+#' fit_manual <- fit_gamlss_models(
+#'   counts_matrix = counts_matrix,
+#'   design_matrix = design,                          # pre-built matrix
+#'   candidate_families = c("NBI", "GG", "LOGNO"),
+#'   contrast_matrix = C,                             # explicit contrasts
+#'   criterion = "BIC",
+#'   parallel = TRUE,
+#'   workers = 4
+#' )
+#' 
+#' head(fit_manual$contrasts)
+#' 
+#' # ============================================================================
+#' # Hierarchical Testing: Omnibus + Contrasts
+#' # ============================================================================
+#' 
+#' # For multi-level factors (3+ levels), use omnibus filtering
+#' metadata_multi <- metadata
+#' metadata_multi$tissue_type <- factor(
+#'   rep(c("Normal", "Luminal", "Basal"), length.out = 100)
+#' )
+#' 
+#' fit_hierarchical <- fit_gamlss_models(
+#'   counts_matrix = counts_matrix,
+#'   design_matrix = "~ tissue_type + age + batch",
+#'   metadata = metadata_multi,
+#'   candidate_families = c("NBI", "GG"),
 #'   contrast_variable = "tissue_type",
-#'   omnibus = TRUE,
-#'   omnibus_threshold = 0.05,
-#'   omnibus_test = "Wald"
+#'   omnibus = TRUE,                 # Enable hierarchical testing
+#'   omnibus_threshold = 0.05,       # Filter threshold
+#'   omnibus_test = "Wald",          # "Wald" or "LRT"
+#'   criterion = "BIC",
+#'   parallel = TRUE,
+#'   workers = 4
 #' )
-#'
+#' 
 #' # View omnibus results
-#' head(fit$omnibus)
-#'
-#' # With omnibus filtering (LRT)
-#' fit_lrt <- fit_gamlss_models(
-#'   counts_matrix, design, c("NBI","GG"),
-#'   metadata = meta,
-#'   contrast_variable = "tissue_type",
-#'   omnibus = TRUE,
-#'   omnibus_test = "LRT"
-#' )
+#' head(fit_hierarchical$omnibus)
+#' 
+#' # Contrasts only computed for features where omnibus$pass == TRUE
+#' head(fit_hierarchical$contrasts)
+#' 
+#' # Count features passing omnibus filter
+#' sum(fit_hierarchical$omnibus$pass, na.rm = TRUE)
 #' }
-#' @seealso find_families, transform_response
+#' @seealso \code{\link{find_families}}, \code{\link{transform_response}}, 
+#'   \code{\link{run_perseo}}
 #' @export
 fit_gamlss_models <- function(counts_matrix,
                               design_matrix,
@@ -302,6 +354,10 @@ fit_gamlss_models <- function(counts_matrix,
     feature_ids <- seq_len(nrow(counts_matrix))
   }
   
+  # ---- Track original design_matrix input type for validation ----
+  design_matrix_original <- design_matrix
+  is_formula_input <- (is.character(design_matrix) && length(design_matrix) == 1) || inherits(design_matrix, "formula")
+  
   # ---- Handle formula string input ----
   if (is.character(design_matrix) && length(design_matrix) == 1) {
     if (is.null(metadata)) {
@@ -313,12 +369,76 @@ fit_gamlss_models <- function(counts_matrix,
     
     formula_obj <- stats::as.formula(design_matrix)
     design_matrix <- stats::model.matrix(formula_obj, data = metadata)
+  } else if (inherits(design_matrix, "formula")) {
+    if (is.null(metadata)) {
+      stop("metadata must be provided when design_matrix is a formula object")
+    }
+    if (!is.data.frame(metadata) || nrow(metadata) != ncol(counts_matrix)) {
+      stop("metadata must be a data.frame with nrow = ncol(counts_matrix)")
+    }
+    
+    design_matrix <- stats::model.matrix(design_matrix, data = metadata)
   }
   
   design_matrix <- validate_design_matrix(design_matrix, ncol(counts_matrix))
   complete_rows <- stats::complete.cases(design_matrix)
   counts_subset <- counts_matrix[, complete_rows, drop = FALSE]
   design_subset <- design_matrix[complete_rows, , drop = FALSE]
+  
+  # ---- Validate contrast input combinations (CRITICAL) ----
+  # Enforce clear contract for automatic contrast generation
+  if (!is.null(contrast_variable) && is.null(contrast_matrix)) {
+    # User wants automatic contrast generation via contrast_variable
+    # This REQUIRES that we can build the design matrix from metadata
+    
+    if (!is_formula_input && is.null(metadata)) {
+      stop(
+        "Invalid input combination:\n",
+        "  When contrast_variable is provided and contrast_matrix is NULL,\n",
+        "  you must EITHER:\n",
+        "    1) Provide design_matrix as a formula (string or formula object) with metadata, OR\n",
+        "    2) Provide both a design matrix AND metadata (ensuring row alignment).\n",
+        "\n",
+        "  Current inputs:\n",
+        "    - design_matrix: ", if (is_formula_input) "formula" else "numeric matrix", "\n",
+        "    - metadata: NULL\n",
+        "    - contrast_variable: '", contrast_variable, "'\n",
+        "    - contrast_matrix: NULL\n",
+        "\n",
+        "  Recommended workflows:\n",
+        "    Workflow A (Formula + automatic contrasts):\n",
+        "      fit_gamlss_models(\n",
+        "        counts_matrix = counts,\n",
+        "        design_matrix = \"~ condition + batch\",  # formula string\n",
+        "        metadata = metadata,                     # required\n",
+        "        contrast_variable = \"condition\",        # auto-generate contrasts\n",
+        "        ...\n",
+        "      )\n",
+        "\n",
+        "    Workflow B (Design matrix + manual contrasts):\n",
+        "      design <- model.matrix(~ condition + batch, data = metadata)\n",
+        "      C <- build_contrast_matrix(...)  # or manually create\n",
+        "      fit_gamlss_models(\n",
+        "        counts_matrix = counts,\n",
+        "        design_matrix = design,      # pre-built matrix\n",
+        "        contrast_matrix = C,         # explicit specification\n",
+        "        ...\n",
+        "      )\n"
+      )
+    }
+    
+    # If metadata is provided but design was a matrix, validate row alignment
+    if (!is_formula_input && !is.null(metadata)) {
+      if (nrow(metadata) != nrow(design_matrix)) {
+        stop(
+          "Row count mismatch:\n",
+          "  design_matrix has ", nrow(design_matrix), " rows\n",
+          "  metadata has ", nrow(metadata), " rows\n",
+          "  These must match when using contrast_variable with a pre-built design matrix."
+        )
+      }
+    }
+  }
   
   # ---- Handle contrast inputs with priority logic ----
   final_contrast_matrix <- NULL
@@ -336,7 +456,7 @@ fit_gamlss_models <- function(counts_matrix,
     if (is.null(metadata)) {
       stop("metadata must be provided when using contrast_variable")
     }
-    final_contrast_matrix <- PERSEO:::build_contrast_matrix(
+    final_contrast_matrix <- build_contrast_matrix(
       contrast_variable, metadata[complete_rows, , drop = FALSE], design_subset
     )
     final_contrast_variable <- contrast_variable
@@ -352,42 +472,81 @@ fit_gamlss_models <- function(counts_matrix,
     }
   }
   
-  # ---- Print startup banner ----
+  # ---- Print startup banner with cli ----
   if (show_progress) {
-    message("\n", strrep("=", 80))
-    message("fit_gamlss_models() - STARTING")
-    message(strrep("=", 80))
-    message("Total features    : ", length(feature_ids))
-    message("Samples           : ", nrow(design_subset))
-    message("Candidate families: ", paste(candidate_families, collapse = ", "))
-    message("Criterion         : ", criterion)
-    message("Transform mode    : ", transform_mode)
-    message("P-value adjustment: ", p_adjust)
-    if (parallel) {
-      message("Parallel workers  : ", n_workers)
-    }
-    if (!is.null(final_contrast_matrix)) {
-      message("Contrasts requested: ", nrow(final_contrast_matrix), " contrasts")
-      if (omnibus) {
-        message("  Omnibus test    : ", omnibus_test, " (threshold: ", omnibus_threshold, ")")
+    # Check if cli is available, fallback to base messages
+    has_cli <- requireNamespace("cli", quietly = TRUE)
+    
+    if (has_cli) {
+      cli::cli_rule("fit_gamlss_models() - STARTING")
+      cli::cli_alert_info("Total features    : {.val {length(feature_ids)}}")
+      cli::cli_alert_info("Samples           : {.val {nrow(design_subset)}}")
+      cli::cli_alert_info("Candidate families: {.val {paste(candidate_families, collapse = ', ')}}")
+      cli::cli_alert_info("Criterion         : {.val {criterion}}")
+      cli::cli_alert_info("Transform mode    : {.val {transform_mode}}")
+      cli::cli_alert_info("P-value adjustment: {.val {p_adjust}}")
+      if (parallel) {
+        cli::cli_alert_info("Parallel workers  : {.val {n_workers}}")
       }
+      if (!is.null(final_contrast_matrix)) {
+        cli::cli_alert_info("Contrasts requested: {.val {nrow(final_contrast_matrix)}} contrasts")
+        if (omnibus) {
+          cli::cli_alert_info("  Omnibus test    : {.val {omnibus_test}} (threshold: {.val {omnibus_threshold}})")
+        }
+      }
+      cli::cli_rule()
+    } else {
+      # Fallback to base messages
+      message("\n", strrep("=", 80))
+      message("fit_gamlss_models() - STARTING")
+      message(strrep("=", 80))
+      message("Total features    : ", length(feature_ids))
+      message("Samples           : ", nrow(design_subset))
+      message("Candidate families: ", paste(candidate_families, collapse = ", "))
+      message("Criterion         : ", criterion)
+      message("Transform mode    : ", transform_mode)
+      message("P-value adjustment: ", p_adjust)
+      if (parallel) {
+        message("Parallel workers  : ", n_workers)
+      }
+      if (!is.null(final_contrast_matrix)) {
+        message("Contrasts requested: ", nrow(final_contrast_matrix), " contrasts")
+        if (omnibus) {
+          message("  Omnibus test    : ", omnibus_test, " (threshold: ", omnibus_threshold, ")")
+        }
+      }
+      message(strrep("=", 80), "\n")
     }
-    message(strrep("=", 80), "\n")
   }
+  
+  # ---- Capture internal functions for parallel workers ----
+  # Workers don't have access to PERSEO::: unless functions are captured locally
+  .has_insufficient_variation <- has_insufficient_variation
+  .is_binomial_family <- is_binomial_family
+  .infer_binomial_denominator <- infer_binomial_denominator
+  .compare_families_with_design <- compare_families_with_design
+  .transform_response <- transform_response
+  .instantiate_gamlss_family <- instantiate_gamlss_family
+  .fit_gamlss_safely <- fit_gamlss_safely
+  .extract_mu_coefficients <- extract_mu_coefficients
+  .identify_factor_coefficients <- identify_factor_coefficients
+  .wald_omnibus_test <- wald_omnibus_test
+  .lrt_omnibus_test <- lrt_omnibus_test
+  .apply_contrasts <- apply_contrasts
   
   # ---- Worker function: process one feature ----
   process_one_feature <- function(feature_name, feature_vec, design_mat, prog) {
     if (!is.null(prog)) prog()
     
-    if (PERSEO:::has_insufficient_variation(feature_vec)) {
+    if (.has_insufficient_variation(feature_vec)) {
       return(NULL)
     }
     
-    bd_vec <- if (any(PERSEO:::is_binomial_family(candidate_families))) {
-      PERSEO:::infer_binomial_denominator(feature_vec)
+    bd_vec <- if (any(.is_binomial_family(candidate_families))) {
+      .infer_binomial_denominator(feature_vec)
     } else NULL
     
-    family_results <- PERSEO:::compare_families_with_design(
+    family_results <- .compare_families_with_design(
       feature_vec,
       design_mat,
       families = candidate_families,
@@ -395,7 +554,8 @@ fit_gamlss_models <- function(counts_matrix,
       gaic_k = gaic_k,
       min_n = min_n,
       bd_vec = bd_vec,
-      transform_mode = transform_mode
+      transform_mode = transform_mode,
+      extract_coef_fn = .extract_mu_coefficients
     )
     
     if (nrow(family_results$comparisons) == 0) {
@@ -421,18 +581,18 @@ fit_gamlss_models <- function(counts_matrix,
     # Only perform omnibus/contrast if requested
     if (!is.null(final_contrast_matrix)) {
       # Re-fit to get beta and vcov for omnibus/contrasts
-      tr <- PERSEO:::transform_response(feature_vec, best$family, mode = transform_mode)
+      tr <- .transform_response(feature_vec, best$family, mode = transform_mode)
       z <- tr$y[tr$mask]
       fit_data <- cbind.data.frame(y = z, design_mat[tr$mask, , drop = FALSE])
       
-      fam_obj <- PERSEO:::instantiate_gamlss_family(
+      fam_obj <- .instantiate_gamlss_family(
         best$family,
-        bd_vec = if (PERSEO:::is_binomial_family(best$family)) {
-          PERSEO:::infer_binomial_denominator(feature_vec, tr$mask)
+        bd_vec = if (.is_binomial_family(best$family)) {
+          .infer_binomial_denominator(feature_vec, tr$mask)
         } else NULL
       )
       
-      best_fit <- PERSEO:::fit_gamlss_safely(y ~ ., data = fit_data, family_obj = fam_obj)
+      best_fit <- .fit_gamlss_safely(y ~ ., data = fit_data, family_obj = fam_obj)
       
       if (!is.null(best_fit)) {
         beta <- tryCatch({ coef(best_fit, what = "mu") }, error = function(e) NULL)
@@ -474,7 +634,7 @@ fit_gamlss_models <- function(counts_matrix,
         # Determine which coefficients belong to the target factor
         factor_coefs <- NULL
         if (!is.null(beta)) {
-          factor_coefs <- PERSEO:::identify_factor_coefficients(
+          factor_coefs <- .identify_factor_coefficients(
             contrast_matrix = final_contrast_matrix,
             contrast_variable = final_contrast_variable,
             coef_names = names(beta)
@@ -486,9 +646,9 @@ fit_gamlss_models <- function(counts_matrix,
         
         if (omnibus && !is.null(factor_coefs) && length(factor_coefs) > 0) {
           omnibus_result <- if (omnibus_test == "Wald" && !is.null(V)) {
-            PERSEO:::wald_omnibus_test(beta, V, factor_coefs)
+            .wald_omnibus_test(beta, V, factor_coefs)
           } else if (omnibus_test == "LRT") {
-            PERSEO:::lrt_omnibus_test(
+            .lrt_omnibus_test(
               feature_vec = feature_vec,
               design_mat = design_mat,
               factor_coefs = factor_coefs,
@@ -516,7 +676,7 @@ fit_gamlss_models <- function(counts_matrix,
         # Compute contrasts only if omnibus passed (or omnibus disabled)
         if (omnibus_pass && !is.null(beta) && !is.null(V) && all(is.finite(V))) {
           contrast_df <- tryCatch({
-            contrast_res <- PERSEO:::apply_contrasts(beta, V, final_contrast_matrix)
+            contrast_res <- .apply_contrasts(beta, V, final_contrast_matrix)
             contrast_res$feature <- feature_name
             contrast_res$family <- best$family
             contrast_res
@@ -552,23 +712,60 @@ fit_gamlss_models <- function(counts_matrix,
     )
   }
   
-  # ---- Parallel execution via future.apply ----
-  p <- if (show_progress) {
-    progressr::progressor(steps = nrow(counts_subset))
-  } else NULL
+  # ---- Execute fitting (sequential or parallel) ----
+  has_cli <- requireNamespace("cli", quietly = TRUE)
+  n_features <- nrow(counts_subset)
   
-  out_list <- future.apply::future_lapply(
-    seq_len(nrow(counts_subset)),
-    function(i) {
-      process_one_feature(
+  if (parallel) {
+    # Parallel execution
+    out_list <- future.apply::future_lapply(
+      seq_len(n_features),
+      function(i) {
+        process_one_feature(
+          feature_name = feature_ids[i],
+          feature_vec  = counts_subset[i,],
+          design_mat   = design_subset,
+          prog         = NULL
+        )
+      },
+      future.seed = TRUE
+    )
+  } else {
+    # Sequential execution with progress reporting
+    start_time <- Sys.time()
+    out_list <- vector("list", n_features)
+    
+    # Report every 10% or every 500 features, whichever is smaller
+    report_interval <- min(500, max(1, floor(n_features / 10)))
+    
+    for (i in seq_len(n_features)) {
+      out_list[[i]] <- process_one_feature(
         feature_name = feature_ids[i],
         feature_vec  = counts_subset[i,],
         design_mat   = design_subset,
-        prog         = p
+        prog         = NULL
       )
-    },
-    future.seed = TRUE
-  )
+      
+      # Progress reporting
+      if (show_progress && (i %% report_interval == 0 || i == n_features)) {
+        elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+        pct <- round(100 * i / n_features, 1)
+        rate <- i / elapsed
+        eta_sec <- (n_features - i) / rate
+        
+        if (has_cli) {
+          cli::cli_alert_info(
+            "Processed {i}/{n_features} ({pct}%) | Elapsed: {round(elapsed, 1)}s | ETA: {round(eta_sec, 1)}s"
+          )
+        } else {
+          message(sprintf(
+            "[%s] Processed %d/%d (%.1f%%) | Elapsed: %.1fs | ETA: %.1fs",
+            format(Sys.time(), "%H:%M:%S"), i, n_features, pct, elapsed, eta_sec
+          ))
+        }
+      }
+    }
+  }
   
   valid_list <- Filter(Negate(is.null), out_list)
   if (length(valid_list) == 0) {
@@ -684,25 +881,51 @@ print_final_report <- function(vars) {
   omnibus_test <- vars$omnibus_test
   omnibus_threshold <- vars$omnibus_threshold
   
-  message("\n", strrep("=", 80))
-  message("fit_gamlss_models() - FINAL REPORT")
-  message(strrep("=", 80))
-  message("\nModel Fitting Summary:")
-  message("  Total features      : ", n_total)
-  message("  Successfully fitted : ", n_success, " (", sprintf("%.1f%%", success_rate), ")")
-  message("  Failed/skipped      : ", n_failed, " (", sprintf("%.1f%%", n_failed/n_total*100), ")")
+  has_cli <- requireNamespace("cli", quietly = TRUE)
+  
+  if (has_cli) {
+    cli::cli_rule("fit_gamlss_models() - FINAL REPORT")
+  } else {
+    message("\n", strrep("=", 80))
+    message("fit_gamlss_models() - FINAL REPORT")
+    message(strrep("=", 80))
+  }
+  if (has_cli) {
+    cli::cli_h2("Model Fitting Summary")
+    cli::cli_ul(c(
+      "Total features      : {.val {n_total}}",
+      "Successfully fitted : {.val {n_success}} ({.val {sprintf('%.1f%%', success_rate)}})",
+      "Failed/skipped      : {.val {n_failed}} ({.val {sprintf('%.1f%%', n_failed/n_total*100)}})"
+    ))
+  } else {
+    message("\nModel Fitting Summary:")
+    message("  Total features      : ", n_total)
+    message("  Successfully fitted : ", n_success, " (", sprintf("%.1f%%", success_rate), ")")
+    message("  Failed/skipped      : ", n_failed, " (", sprintf("%.1f%%", n_failed/n_total*100), ")")
+  }
   
   if (n_success > 0) {
     # Family distribution
     fam_table <- table(selection_df$best_family)
     fam_sorted <- sort(fam_table, decreasing = TRUE)
     
-    message("\nSelected Family Distribution:")
-    for (i in seq_along(fam_sorted)) {
-      fam_name <- names(fam_sorted)[i]
-      count <- as.numeric(fam_sorted[i])
-      pct <- count / sum(fam_sorted) * 100
-      message(sprintf("  %-10s : %5d (%.1f%%)", fam_name, count, pct))
+    if (has_cli) {
+      cli::cli_h2("Selected Family Distribution")
+      fam_items <- vapply(seq_along(fam_sorted), function(i) {
+        fam_name <- names(fam_sorted)[i]
+        count <- as.numeric(fam_sorted[i])
+        pct <- count / sum(fam_sorted) * 100
+        sprintf("%s: %d (%.1f%%)", fam_name, count, pct)
+      }, character(1))
+      cli::cli_ul(fam_items)
+    } else {
+      message("\nSelected Family Distribution:")
+      for (i in seq_along(fam_sorted)) {
+        fam_name <- names(fam_sorted)[i]
+        count <- as.numeric(fam_sorted[i])
+        pct <- count / sum(fam_sorted) * 100
+        message(sprintf("  %-10s : %5d (%.1f%%)", fam_name, count, pct))
+      }
     }
     
     # Coefficient statistics
@@ -711,9 +934,17 @@ print_final_report <- function(vars) {
       n_sig <- sum(results_df$padj < 0.05, na.rm = TRUE)
       sig_rate <- if (n_coefs > 0) n_sig / n_coefs * 100 else 0
       
-      message("\nCoefficient Results:")
-      message("  Total coefficients  : ", n_coefs)
-      message("  Significant (FDR<5%): ", n_sig, " (", sprintf("%.1f%%", sig_rate), ")")
+      if (has_cli) {
+        cli::cli_h2("Coefficient Results")
+        cli::cli_ul(c(
+          "Total coefficients  : {.val {n_coefs}}",
+          "Significant (FDR<5%): {.val {n_sig}} ({.val {sprintf('%.1f%%', sig_rate)}})"
+        ))
+      } else {
+        message("\nCoefficient Results:")
+        message("  Total coefficients  : ", n_coefs)
+        message("  Significant (FDR<5%): ", n_sig, " (", sprintf("%.1f%%", sig_rate), ")")
+      }
       
       # Per-term breakdown
       term_summary <- results_df %>%
@@ -726,14 +957,26 @@ print_final_report <- function(vars) {
         dplyr::arrange(dplyr::desc(n_sig))
       
       if (nrow(term_summary) > 0) {
-        message("\n  Significant findings by term:")
-        for (i in seq_len(min(10, nrow(term_summary)))) {
-          term_name <- term_summary$term[i]
-          n_sig_term <- term_summary$n_sig[i]
-          n_total_term <- term_summary$n_total[i]
-          pct_sig <- n_sig_term / n_total_term * 100
-          message(sprintf("    %-25s : %5d / %5d (%.1f%%)", 
-                        term_name, n_sig_term, n_total_term, pct_sig))
+        if (has_cli) {
+          cli::cli_h3("Significant findings by term (top 10)")
+          term_items <- vapply(seq_len(min(10, nrow(term_summary))), function(i) {
+            term_name <- term_summary$term[i]
+            n_sig_term <- term_summary$n_sig[i]
+            n_total_term <- term_summary$n_total[i]
+            pct_sig <- n_sig_term / n_total_term * 100
+            sprintf("%s: %d / %d (%.1f%%)", term_name, n_sig_term, n_total_term, pct_sig)
+          }, character(1))
+          cli::cli_ul(term_items)
+        } else {
+          message("\n  Significant findings by term:")
+          for (i in seq_len(min(10, nrow(term_summary)))) {
+            term_name <- term_summary$term[i]
+            n_sig_term <- term_summary$n_sig[i]
+            n_total_term <- term_summary$n_total[i]
+            pct_sig <- n_sig_term / n_total_term * 100
+            message(sprintf("    %-25s : %5d / %5d (%.1f%%)", 
+                          term_name, n_sig_term, n_total_term, pct_sig))
+          }
         }
       }
     }
@@ -743,24 +986,51 @@ print_final_report <- function(vars) {
       n_contrasts <- nrow(output$contrasts)
       n_sig_contrasts <- sum(output$contrasts$p_adj < 0.05, na.rm = TRUE)
       
-      message("\nContrast Results:")
-      message("  Total contrasts     : ", n_contrasts)
-      message("  Significant (FDR<5%): ", n_sig_contrasts, " (", 
-              sprintf("%.1f%%", n_sig_contrasts/n_contrasts*100), ")")
-      
-      if (omnibus && !is.null(output$omnibus)) {
-        n_omnibus_pass <- sum(output$omnibus$pass, na.rm = TRUE)
-        n_omnibus_total <- nrow(output$omnibus)
-        message("\nOmnibus Test (", omnibus_test, "):")
-        message("  Features tested     : ", n_omnibus_total)
-        message("  Passed threshold    : ", n_omnibus_pass, " (", 
-                sprintf("%.1f%%", n_omnibus_pass/n_omnibus_total*100), ")")
-        message("  Threshold           : p < ", omnibus_threshold)
+      if (has_cli) {
+        cli::cli_h2("Contrast Results")
+        cli::cli_ul(c(
+          "Total contrasts     : {.val {n_contrasts}}",
+          "Significant (FDR<5%): {.val {n_sig_contrasts}} ({.val {sprintf('%.1f%%', n_sig_contrasts/n_contrasts*100)}})"
+        ))
+        
+        if (omnibus && !is.null(output$omnibus)) {
+          n_omnibus_pass <- sum(output$omnibus$pass, na.rm = TRUE)
+          n_omnibus_total <- nrow(output$omnibus)
+          cli::cli_h2("Omnibus Test ({omnibus_test})")
+          cli::cli_ul(c(
+            "Features tested     : {.val {n_omnibus_total}}",
+            "Passed threshold    : {.val {n_omnibus_pass}} ({.val {sprintf('%.1f%%', n_omnibus_pass/n_omnibus_total*100)}})",
+            "Threshold           : p < {.val {omnibus_threshold}}"
+          ))
+        }
+      } else {
+        message("\nContrast Results:")
+        message("  Total contrasts     : ", n_contrasts)
+        message("  Significant (FDR<5%): ", n_sig_contrasts, " (", 
+                sprintf("%.1f%%", n_sig_contrasts/n_contrasts*100), ")")
+        
+        if (omnibus && !is.null(output$omnibus)) {
+          n_omnibus_pass <- sum(output$omnibus$pass, na.rm = TRUE)
+          n_omnibus_total <- nrow(output$omnibus)
+          message("\nOmnibus Test (", omnibus_test, "):")
+          message("  Features tested     : ", n_omnibus_total)
+          message("  Passed threshold    : ", n_omnibus_pass, " (", 
+                  sprintf("%.1f%%", n_omnibus_pass/n_omnibus_total*100), ")")
+          message("  Threshold           : p < ", omnibus_threshold)
+        }
       }
     }
   } else {
-    message("\n[WARNING] No features were successfully fitted.")
+    if (has_cli) {
+      cli::cli_alert_warning("No features were successfully fitted.")
+    } else {
+      message("\n[WARNING] No features were successfully fitted.")
+    }
   }
   
-  message(strrep("=", 80), "\n")
+  if (has_cli) {
+    cli::cli_rule()
+  } else {
+    message(strrep("=", 80), "\n")
+  }
 }

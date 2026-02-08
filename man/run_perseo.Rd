@@ -21,7 +21,7 @@ run_perseo(
   filter_beta_inflated = TRUE,
   p_adjust_method = "BH",
   transform_mode = NULL,
-  verbose = TRUE,
+  show_progress = TRUE,
   seed = NULL
 )
 }
@@ -74,7 +74,7 @@ If NULL (default), automatically sets to "strict" when group_by_support = TRUE,
 and "safe" when group_by_support = FALSE. Controls transformation behavior for
 both family selection and differential expression.}
 
-\item{verbose}{Logical, print progress messages (default: TRUE).}
+\item{show_progress}{Logical, show progress messages and reports (default: TRUE).}
 
 \item{seed}{Integer or NULL, random seed for reproducibility (default: NULL).}
 }
@@ -108,9 +108,9 @@ This is the recommended entry point for end-to-end analyses.
 3. **Multiple Testing Correction**: Adjusts p-values globally across all features
    and terms using the specified method (default: Benjamini-Hochberg FDR).
 
-**Verbosity Control:**
-- `verbose = TRUE`: Prints progress for both family selection and model fitting.
-- `verbose = FALSE`: Suppresses all informational messages (errors still shown).
+**Progress Control:**
+- `show_progress = TRUE`: Shows progress messages and reports for both family selection and model fitting.
+- `show_progress = FALSE`: Suppresses all informational messages (errors still shown).
 
 **P-value Adjustment:**
 Applied globally across all features and model terms. The `p_adjust_method`
@@ -134,7 +134,7 @@ results <- run_perseo(
   top_n = 4,
   criterion = "BIC",
   p_adjust_method = "BH",
-  verbose = TRUE,
+  show_progress = TRUE,
   seed = 12345
 )
 

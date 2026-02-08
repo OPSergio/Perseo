@@ -217,7 +217,7 @@ test_that("PERSEO end-to-end workflow on realistic synthetic omics data", {
     n_genes = 160,
     n_boot  = 4,
     top_n   = 6,
-    verbose = debug_on,
+    show_progress = debug_on,
     min_n   = 10,
     seed    = 123,
     group_by_support = FALSE,  # KEY: the 'breakthrough' mode must stay valid

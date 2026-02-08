@@ -8,8 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+---
+
+## [1.0.0] - 2026-02-08
+
+First major release of PERSEO.
+
 ### Added
 
+- **Enhanced user experience (UX)**: Major improvements to console output and progress reporting
 - **Hierarchical omnibus testing**: `fit_gamlss_models()` and `run_perseo()` now support omnibus tests
   - New parameters: `omnibus`, `omnibus_test`, `omnibus_threshold`
   - Two test types: Wald (fast, vcov-based) and LRT (robust, model refitting)

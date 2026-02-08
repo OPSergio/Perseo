@@ -1,11 +1,11 @@
 Package: PERSEO
 Type: Package
 Title: Model-Aware Differential Expression for Omics Data
-Version: 0.0.1
+Version: 1.0.0
 Authors@R: c(
     person("Sergio", "Olmos-Piñero", 
-           email = "solmos97@gmail.com", 
-           role = c("aut", "cre")),
+            email = "solmos97@gmail.com", 
+            role = c("aut", "cre")),
     person("Val", "Fenández-Lanza",
             email = "valVF@gmail.com",
             role = "aut")
@@ -35,6 +35,7 @@ Suggests:
     testthat (>= 3.0.0),
     future (>= 1.32.0),
     future.apply (>= 1.11.0),
+    cli (>= 3.6.0),
     devtools,
     covr,
     knitr,

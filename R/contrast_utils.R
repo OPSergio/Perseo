@@ -1,3 +1,118 @@
+#' Apply linear contrasts to GAMLSS mu coefficients
+#'
+#' Computes estimates, standard errors, z-statistics and p-values for arbitrary
+#' linear contrasts of mu-parameter coefficients from a fitted GAMLSS model.
+#'
+#' @param beta Named numeric vector of coefficients from `coef(fit, what = "mu")`.
+#' @param V Covariance matrix from `vcov(fit, what = "mu")`.
+#' @param C Contrast matrix where each row defines a linear combination.
+#'   Column names must match (a subset of) `names(beta)`.
+#'
+#' @return A tibble with columns:
+#'   \describe{
+#'     \item{contrast}{Contrast name (from rownames(C))}
+#'     \item{estimate}{Point estimate (C times beta)}
+#'     \item{se}{Standard error}
+#'     \item{z}{z-statistic}
+#'     \item{p_value}{Two-sided p-value}
+#'   }
+#'
+#' @details Missing columns in C are filled with 0; extra columns in C not in
+#' beta are dropped. If vcov is not positive definite or contains NAs/Infs,
+#' all statistics are returned as NA.
+#'
+#' @keywords internal
+apply_contrasts <- function(beta, V, C) {
+  # Validate inputs
+  if (!is.numeric(beta) || is.null(names(beta))) {
+    stop("beta must be a named numeric vector")
+  }
+  if (!is.matrix(V) || nrow(V) != ncol(V) || nrow(V) != length(beta)) {
+    stop("V must be a square matrix with nrow = length(beta)")
+  }
+  if (!is.matrix(C) || ncol(C) == 0) {
+    stop("C must be a numeric matrix with at least one column")
+  }
+  
+  # Check for non-finite values in V
+  if (any(!is.finite(V))) {
+    warning("vcov contains non-finite values; returning NA contrasts")
+    contrast_names <- if (!is.null(rownames(C))) {
+      rownames(C)
+    } else {
+      paste0("contrast_", seq_len(nrow(C)))
+    }
+    return(tibble::tibble(
+      contrast = contrast_names,
+      estimate = NA_real_,
+      se = NA_real_,
+      z = NA_real_,
+      p_value = NA_real_
+    ))
+  }
+  
+  # Align C columns to beta names
+  beta_names <- names(beta)
+  C_names <- colnames(C)
+  
+  if (is.null(C_names)) {
+    stop("C must have column names matching coefficient names")
+  }
+  
+  # Create aligned contrast matrix: rows = contrasts, cols = beta_names
+  C_aligned <- matrix(0, nrow = nrow(C), ncol = length(beta_names))
+  colnames(C_aligned) <- beta_names
+  rownames(C_aligned) <- rownames(C)
+  
+  # Fill in values where columns match
+  matched_cols <- intersect(C_names, beta_names)
+  if (length(matched_cols) == 0) {
+    warning("No contrast matrix columns match coefficient names; returning NA")
+    contrast_names <- if (!is.null(rownames(C))) {
+      rownames(C)
+    } else {
+      paste0("contrast_", seq_len(nrow(C)))
+    }
+    return(tibble::tibble(
+      contrast = contrast_names,
+      estimate = NA_real_,
+      se = NA_real_,
+      z = NA_real_,
+      p_value = NA_real_
+    ))
+  }
+  
+  for (col in matched_cols) {
+    C_aligned[, col] <- C[, col]
+  }
+  
+  # Compute contrasts
+  estimates <- as.numeric(C_aligned %*% beta)
+  variances <- diag(C_aligned %*% V %*% t(C_aligned))
+  
+  # Ensure non-negative variances
+  variances <- pmax(variances, 0)
+  ses <- sqrt(variances)
+  
+  z_values <- estimates / ses
+  p_values <- 2 * pnorm(abs(z_values), lower.tail = FALSE)
+  
+  contrast_names <- if (!is.null(rownames(C))) {
+    rownames(C)
+  } else {
+    paste0("contrast_", seq_len(nrow(C)))
+  }
+  
+  tibble::tibble(
+    contrast = contrast_names,
+    estimate = unname(estimates),
+    se = unname(ses),
+    z = unname(z_values),
+    p_value = unname(p_values)
+  )
+}
+
+
 #' Build pairwise contrast matrix from categorical variable
 #'
 #' Creates a contrast matrix for all pairwise comparisons of a

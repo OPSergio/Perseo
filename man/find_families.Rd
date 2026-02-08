@@ -23,7 +23,7 @@ find_families(
   transform_mode = "strict",
   workers = NULL,
   parallel = FALSE,
-  verbose = TRUE
+  show_progress = TRUE
 )
 }
 \arguments{
@@ -79,7 +79,7 @@ If `NULL`, uses `future::availableCores() - 1`. Default `NULL`.}
 When `TRUE`, automatically configures and cleans up the future backend.
 Default `FALSE`.}
 
-\item{verbose}{logical; print progress messages (default TRUE).}
+\item{show_progress}{logical; show progress messages and reports (default TRUE).}
 }
 \value{
 A list with:

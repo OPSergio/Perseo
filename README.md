@@ -1,5 +1,5 @@
 <div align="left">
-  <h1 style="display: inline-block;">PERSEO: Model-Aware Differential Expression for Omics Data</h1>
+  <h1 style="display: inline-block;">PERSEO: Model-Aware Differential Analysis for Omics Data</h1>
   <img src="assets/logo_perseo.png" alt="Perseo Logo" width="150" align="right">
   <br/>
 

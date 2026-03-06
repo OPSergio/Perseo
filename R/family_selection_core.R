@@ -186,6 +186,10 @@ compare_families_on_feature <- function(feature_vec,
 #'
 #' @param feature_vec Numeric vector with feature values across samples.
 #' @param design_df Data frame with covariates (cleaned, no intercept column).
+#' @param formula_mu Optional model formula for direct GAMLSS fitting
+#'   (e.g., `y ~ condition + random(subject)`). When provided, covariates are
+#'   taken from `metadata_df` and `design_df` is ignored for model fitting.
+#' @param metadata_df Optional metadata data.frame used with `formula_mu`.
 #' @param families Character vector of eligible family names.
 #' @param criterion Character IC criterion.
 #' @param gaic_k Optional GAIC penalty.
@@ -204,11 +208,24 @@ compare_families_with_design <- function(feature_vec,
                                          min_n = 5,
                                          bd_vec = NULL,
                                          transform_mode = "strict",
-                                         extract_coef_fn = NULL) {
+                                         extract_coef_fn = NULL,
+                                         formula_mu = NULL,
+                                         metadata_df = NULL) {
   y <- feature_vec
   candidate_families <- families
   design_matrix <- design_df
-  complete_rows <- stats::complete.cases(design_matrix)
+  use_formula <- !is.null(formula_mu)
+  complete_rows <- if (use_formula) {
+    if (is.null(metadata_df) || !is.data.frame(metadata_df)) {
+      stop("metadata_df must be a data.frame when formula_mu is provided")
+    }
+    if (nrow(metadata_df) != length(y)) {
+      stop("metadata_df must have one row per sample in feature_vec")
+    }
+    stats::complete.cases(metadata_df)
+  } else {
+    stats::complete.cases(design_matrix)
+  }
   
   # Use default extractor if not provided
   if (is.null(extract_coef_fn)) {
@@ -241,8 +258,12 @@ compare_families_with_design <- function(feature_vec,
   # Compute IC penalty
   penalty <- compute_ic_penalty(criterion, gaic_k, n_valid)
 
-  # Prepare masked design matrix
-  design_masked <- design_matrix[common_mask, , drop = FALSE]
+  # Prepare masked predictors
+  design_masked <- if (use_formula) {
+    metadata_df[common_mask, , drop = FALSE]
+  } else {
+    design_matrix[common_mask, , drop = FALSE]
+  }
   
   # Prepare binomial denominators if needed
   needs_bd <- any(vapply(candidate_families, is_binomial_family, logical(1)))
@@ -277,7 +298,7 @@ compare_families_with_design <- function(feature_vec,
     
     # Fit with covariates
     fit <- fit_gamlss_safely(
-      y ~ .,
+      if (use_formula) formula_mu else y ~ .,
       data = fit_data,
       family_obj = fam_obj
     )

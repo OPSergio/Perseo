@@ -191,6 +191,10 @@ find_families <- function(counts_matrix,
   n_samples <- ncol(counts_matrix)
   
   # ---- Capture internal functions for parallel workers ----
+  .has_insufficient_variation <- has_insufficient_variation
+  .infer_support <- infer_support
+  .filter_candidate_families <- filter_candidate_families
+  .compare_families_on_feature <- compare_families_on_feature
   .extract_mu_coefficients <- extract_mu_coefficients
   
   # ---- Per-feature evaluation worker ----
@@ -198,13 +202,13 @@ find_families <- function(counts_matrix,
     y <- as.numeric(counts_matrix[feature_id, ])
     
     # Early exit: insufficient variation
-    if (has_insufficient_variation(y)) {
+    if (.has_insufficient_variation(y)) {
       return(list(
         feature = feature_id,
         family = NA_character_,
         skipped = TRUE,
         n_valid = 0L,
-        support = infer_support(y)
+        support = .infer_support(y)
       ))
     }
     
@@ -220,7 +224,7 @@ find_families <- function(counts_matrix,
     }
     
     # Filter candidate families
-    filtered <- filter_candidate_families(
+    filtered <- .filter_candidate_families(
       feature_vec = y,
       candidate_families = families,
       group_by_support = group_by_support,
@@ -240,7 +244,7 @@ find_families <- function(counts_matrix,
     }
     
     # Compare families and select best
-    selection_result <- compare_families_on_feature(
+    selection_result <- .compare_families_on_feature(
       feature_vec = y,
       families = filtered$families_to_test,
       min_n = min_n,
@@ -310,8 +314,7 @@ find_families <- function(counts_matrix,
       future.apply::future_lapply(
         pull_ids, 
         evaluate_feature, 
-        future.seed = TRUE,
-        future.packages = "PERSEO"
+        future.seed = TRUE
       )
     })
   } else {
@@ -346,8 +349,7 @@ find_families <- function(counts_matrix,
       future.apply::future_lapply(
         feature_ids_all,
         evaluate_feature,
-        future.seed = TRUE,
-        future.packages = "PERSEO"
+        future.seed = TRUE
       )
     )
   }

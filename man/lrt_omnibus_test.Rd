@@ -10,7 +10,10 @@ lrt_omnibus_test(
   factor_coefs,
   family,
   transform_mode = "strict",
-  bd_vec = NULL
+  bd_vec = NULL,
+  formula_mu = NULL,
+  metadata_df = NULL,
+  contrast_variable = NULL
 )
 }
 \arguments{
@@ -25,6 +28,14 @@ lrt_omnibus_test(
 \item{transform_mode}{"strict" or "safe".}
 
 \item{bd_vec}{Optional binomial denominator vector.}
+
+\item{formula_mu}{Optional full model formula (response must be `y`) for
+direct GAMLSS fitting.}
+
+\item{metadata_df}{Optional metadata data.frame used with `formula_mu`.}
+
+\item{contrast_variable}{Optional variable name used to define reduced model
+when `formula_mu` is provided.}
 }
 \value{
 List with:

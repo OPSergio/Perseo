@@ -355,35 +355,53 @@ fit_gamlss_models <- function(counts_matrix,
   }
   
   # ---- Track original design_matrix input type for validation ----
-  design_matrix_original <- design_matrix
   is_formula_input <- (is.character(design_matrix) && length(design_matrix) == 1) || inherits(design_matrix, "formula")
-  
-  # ---- Handle formula string input ----
-  if (is.character(design_matrix) && length(design_matrix) == 1) {
+
+  formula_mu <- NULL
+  design_subset <- NULL
+  metadata_subset <- NULL
+
+  # ---- Handle formula vs matrix input ----
+  if (is_formula_input) {
     if (is.null(metadata)) {
-      stop("metadata must be provided when design_matrix is a formula string")
+      stop("metadata must be provided when design_matrix is a formula")
     }
     if (!is.data.frame(metadata) || nrow(metadata) != ncol(counts_matrix)) {
       stop("metadata must be a data.frame with nrow = ncol(counts_matrix)")
     }
-    
-    formula_obj <- stats::as.formula(design_matrix)
-    design_matrix <- stats::model.matrix(formula_obj, data = metadata)
-  } else if (inherits(design_matrix, "formula")) {
-    if (is.null(metadata)) {
-      stop("metadata must be provided when design_matrix is a formula object")
+
+    formula_obj <- if (is.character(design_matrix)) {
+      stats::as.formula(design_matrix)
+    } else {
+      design_matrix
     }
-    if (!is.data.frame(metadata) || nrow(metadata) != ncol(counts_matrix)) {
-      stop("metadata must be a data.frame with nrow = ncol(counts_matrix)")
+
+    terms_obj <- stats::terms(formula_obj)
+    term_labels <- attr(terms_obj, "term.labels")
+    has_intercept <- attr(terms_obj, "intercept")
+    formula_mu <- stats::reformulate(
+      termlabels = term_labels,
+      response = "y",
+      intercept = has_intercept
+    )
+    environment(formula_mu) <- environment(formula_obj)
+
+    formula_vars <- intersect(all.vars(formula_obj), names(metadata))
+    metadata_for_cc <- if (length(formula_vars) > 0) {
+      metadata[, formula_vars, drop = FALSE]
+    } else {
+      data.frame(.row_id = seq_len(nrow(metadata)))
     }
-    
-    design_matrix <- stats::model.matrix(design_matrix, data = metadata)
+
+    complete_rows <- stats::complete.cases(metadata_for_cc)
+    counts_subset <- counts_matrix[, complete_rows, drop = FALSE]
+    metadata_subset <- metadata[complete_rows, , drop = FALSE]
+  } else {
+    design_matrix <- validate_design_matrix(design_matrix, ncol(counts_matrix))
+    complete_rows <- stats::complete.cases(design_matrix)
+    counts_subset <- counts_matrix[, complete_rows, drop = FALSE]
+    design_subset <- design_matrix[complete_rows, , drop = FALSE]
   }
-  
-  design_matrix <- validate_design_matrix(design_matrix, ncol(counts_matrix))
-  complete_rows <- stats::complete.cases(design_matrix)
-  counts_subset <- counts_matrix[, complete_rows, drop = FALSE]
-  design_subset <- design_matrix[complete_rows, , drop = FALSE]
   
   # ---- Validate contrast input combinations (CRITICAL) ----
   # Enforce clear contract for automatic contrast generation
@@ -456,11 +474,17 @@ fit_gamlss_models <- function(counts_matrix,
     if (is.null(metadata)) {
       stop("metadata must be provided when using contrast_variable")
     }
-    final_contrast_matrix <- build_contrast_matrix(
-      contrast_variable, metadata[complete_rows, , drop = FALSE], design_subset
-    )
+    if (is_formula_input) {
+      final_contrast_matrix <- NULL
+    } else {
+      final_contrast_matrix <- build_contrast_matrix(
+        contrast_variable, metadata[complete_rows, , drop = FALSE], design_subset
+      )
+    }
     final_contrast_variable <- contrast_variable
   }
+
+  has_contrasts_requested <- !is.null(final_contrast_matrix) || !is.null(final_contrast_variable)
   
   # ---- Validate contrast matrix if present ----
   if (!is.null(final_contrast_matrix)) {
@@ -480,7 +504,7 @@ fit_gamlss_models <- function(counts_matrix,
     if (has_cli) {
       cli::cli_rule("fit_gamlss_models() - STARTING")
       cli::cli_alert_info("Total features    : {.val {length(feature_ids)}}")
-      cli::cli_alert_info("Samples           : {.val {nrow(design_subset)}}")
+      cli::cli_alert_info("Samples           : {.val {ncol(counts_subset)}}")
       cli::cli_alert_info("Candidate families: {.val {paste(candidate_families, collapse = ', ')}}")
       cli::cli_alert_info("Criterion         : {.val {criterion}}")
       cli::cli_alert_info("Transform mode    : {.val {transform_mode}}")
@@ -488,8 +512,9 @@ fit_gamlss_models <- function(counts_matrix,
       if (parallel) {
         cli::cli_alert_info("Parallel workers  : {.val {n_workers}}")
       }
-      if (!is.null(final_contrast_matrix)) {
-        cli::cli_alert_info("Contrasts requested: {.val {nrow(final_contrast_matrix)}} contrasts")
+      if (has_contrasts_requested) {
+        n_contr <- if (is.null(final_contrast_matrix)) "auto" else nrow(final_contrast_matrix)
+        cli::cli_alert_info("Contrasts requested: {.val {n_contr}} contrasts")
         if (omnibus) {
           cli::cli_alert_info("  Omnibus test    : {.val {omnibus_test}} (threshold: {.val {omnibus_threshold}})")
         }
@@ -501,7 +526,7 @@ fit_gamlss_models <- function(counts_matrix,
       message("fit_gamlss_models() - STARTING")
       message(strrep("=", 80))
       message("Total features    : ", length(feature_ids))
-      message("Samples           : ", nrow(design_subset))
+      message("Samples           : ", ncol(counts_subset))
       message("Candidate families: ", paste(candidate_families, collapse = ", "))
       message("Criterion         : ", criterion)
       message("Transform mode    : ", transform_mode)
@@ -509,8 +534,9 @@ fit_gamlss_models <- function(counts_matrix,
       if (parallel) {
         message("Parallel workers  : ", n_workers)
       }
-      if (!is.null(final_contrast_matrix)) {
-        message("Contrasts requested: ", nrow(final_contrast_matrix), " contrasts")
+      if (has_contrasts_requested) {
+        n_contr <- if (is.null(final_contrast_matrix)) "auto" else as.character(nrow(final_contrast_matrix))
+        message("Contrasts requested: ", n_contr, " contrasts")
         if (omnibus) {
           message("  Omnibus test    : ", omnibus_test, " (threshold: ", omnibus_threshold, ")")
         }
@@ -535,7 +561,7 @@ fit_gamlss_models <- function(counts_matrix,
   .apply_contrasts <- apply_contrasts
   
   # ---- Worker function: process one feature ----
-  process_one_feature <- function(feature_name, feature_vec, design_mat, prog) {
+  process_one_feature <- function(feature_name, feature_vec, design_mat, metadata_df, prog) {
     if (!is.null(prog)) prog()
     
     if (.has_insufficient_variation(feature_vec)) {
@@ -555,7 +581,9 @@ fit_gamlss_models <- function(counts_matrix,
       min_n = min_n,
       bd_vec = bd_vec,
       transform_mode = transform_mode,
-      extract_coef_fn = .extract_mu_coefficients
+      extract_coef_fn = .extract_mu_coefficients,
+      formula_mu = formula_mu,
+      metadata_df = metadata_df
     )
     
     if (nrow(family_results$comparisons) == 0) {
@@ -579,11 +607,15 @@ fit_gamlss_models <- function(counts_matrix,
     contrast_df <- NULL
     
     # Only perform omnibus/contrast if requested
-    if (!is.null(final_contrast_matrix)) {
+    if (has_contrasts_requested) {
       # Re-fit to get beta and vcov for omnibus/contrasts
       tr <- .transform_response(feature_vec, best$family, mode = transform_mode)
       z <- tr$y[tr$mask]
-      fit_data <- cbind.data.frame(y = z, design_mat[tr$mask, , drop = FALSE])
+      fit_data <- if (is_formula_input) {
+        cbind.data.frame(y = z, metadata_df[tr$mask, , drop = FALSE])
+      } else {
+        cbind.data.frame(y = z, design_mat[tr$mask, , drop = FALSE])
+      }
       
       fam_obj <- .instantiate_gamlss_family(
         best$family,
@@ -592,7 +624,11 @@ fit_gamlss_models <- function(counts_matrix,
         } else NULL
       )
       
-      best_fit <- .fit_gamlss_safely(y ~ ., data = fit_data, family_obj = fam_obj)
+      best_fit <- .fit_gamlss_safely(
+        if (is_formula_input) formula_mu else y ~ .,
+        data = fit_data,
+        family_obj = fam_obj
+      )
       
       if (!is.null(best_fit)) {
         beta <- tryCatch({ coef(best_fit, what = "mu") }, error = function(e) NULL)
@@ -632,10 +668,19 @@ fit_gamlss_models <- function(counts_matrix,
         }
         
         # Determine which coefficients belong to the target factor
+        contrast_matrix_current <- final_contrast_matrix
+        if (is.null(contrast_matrix_current) && !is.null(final_contrast_variable) && !is.null(beta)) {
+          contrast_matrix_current <- tryCatch({
+            coef_name_stub <- matrix(0, nrow = nrow(metadata_df), ncol = length(beta))
+            colnames(coef_name_stub) <- names(beta)
+            build_contrast_matrix(final_contrast_variable, metadata_df, coef_name_stub)
+          }, error = function(e) NULL)
+        }
+
         factor_coefs <- NULL
         if (!is.null(beta)) {
           factor_coefs <- .identify_factor_coefficients(
-            contrast_matrix = final_contrast_matrix,
+            contrast_matrix = contrast_matrix_current,
             contrast_variable = final_contrast_variable,
             coef_names = names(beta)
           )
@@ -654,7 +699,10 @@ fit_gamlss_models <- function(counts_matrix,
               factor_coefs = factor_coefs,
               family = best$family,
               transform_mode = transform_mode,
-              bd_vec = bd_vec
+              bd_vec = bd_vec,
+              formula_mu = if (is_formula_input) formula_mu else NULL,
+              metadata_df = if (is_formula_input) metadata_df else NULL,
+              contrast_variable = final_contrast_variable
             )
           } else {
             list(statistic = NA_real_, df = NA_integer_, p_value = NA_real_, test_type = omnibus_test)
@@ -674,18 +722,18 @@ fit_gamlss_models <- function(counts_matrix,
         }
         
         # Compute contrasts only if omnibus passed (or omnibus disabled)
-        if (omnibus_pass && !is.null(beta) && !is.null(V) && all(is.finite(V))) {
+        if (omnibus_pass && !is.null(beta) && !is.null(V) && all(is.finite(V)) && !is.null(contrast_matrix_current)) {
           contrast_df <- tryCatch({
-            contrast_res <- .apply_contrasts(beta, V, final_contrast_matrix)
+            contrast_res <- .apply_contrasts(beta, V, contrast_matrix_current)
             contrast_res$feature <- feature_name
             contrast_res$family <- best$family
             contrast_res
           }, error = function(e) {
             # Fit failed
-            contrast_names <- if (!is.null(rownames(final_contrast_matrix))) {
-              rownames(final_contrast_matrix)
+            contrast_names <- if (!is.null(rownames(contrast_matrix_current))) {
+              rownames(contrast_matrix_current)
             } else {
-              paste0("contrast_", seq_len(nrow(final_contrast_matrix)))
+              paste0("contrast_", seq_len(nrow(contrast_matrix_current)))
             }
             tibble::tibble(
               feature = feature_name,
@@ -725,6 +773,7 @@ fit_gamlss_models <- function(counts_matrix,
           feature_name = feature_ids[i],
           feature_vec  = counts_subset[i,],
           design_mat   = design_subset,
+          metadata_df  = metadata_subset,
           prog         = NULL
         )
       },
@@ -743,6 +792,7 @@ fit_gamlss_models <- function(counts_matrix,
         feature_name = feature_ids[i],
         feature_vec  = counts_subset[i,],
         design_mat   = design_subset,
+        metadata_df  = metadata_subset,
         prog         = NULL
       )
       
@@ -778,7 +828,7 @@ fit_gamlss_models <- function(counts_matrix,
       n_valid_obs = integer(), ic_value = numeric()
     )
     empty_out <- list(results = empty_res, selection = empty_sel)
-    if (!is.null(final_contrast_matrix)) {
+    if (has_contrasts_requested) {
       if (omnibus) {
         empty_out$omnibus <- tibble::tibble(
           feature = character(), family = character(), test_type = character(),
@@ -820,7 +870,7 @@ fit_gamlss_models <- function(counts_matrix,
   output <- list(results = results_df, selection = selection_df)
   
   # ---- Aggregate omnibus results ----
-  if (!is.null(final_contrast_matrix) && omnibus) {
+  if (has_contrasts_requested && omnibus) {
     omnibus_list <- lapply(valid_list, `[[`, "omnibus_df")
     omnibus_list <- Filter(Negate(is.null), omnibus_list)
     
@@ -830,7 +880,7 @@ fit_gamlss_models <- function(counts_matrix,
   }
   
   # ---- Aggregate contrasts and compute FDR per contrast (UNCHANGED LOGIC) ----
-  if (!is.null(final_contrast_matrix)) {
+  if (has_contrasts_requested) {
     contrasts_df <- dplyr::bind_rows(lapply(valid_list, `[[`, "contrast_df"))
     
     if (nrow(contrasts_df) > 0 && "p_value" %in% names(contrasts_df)) {

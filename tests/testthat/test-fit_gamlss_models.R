@@ -25,6 +25,96 @@ test_that("fit_gamlss_models accepts formula string input", {
   expect_true(all(c("feature", "term", "effect", "pval") %in% names(result$results)))
 })
 
+test_that("fit_gamlss_models accepts formula with random effects", {
+  skip_on_cran()
+  skip_if_not_installed("gamlss")
+
+  set.seed(124)
+  counts <- matrix(rpois(180, lambda = 10), nrow = 6, ncol = 30)
+  rownames(counts) <- paste0("gene", 1:6)
+
+  metadata <- data.frame(
+    condition = factor(rep(c("A", "B"), each = 15)),
+    subject = factor(rep(1:10, length.out = 30))
+  )
+
+  result <- fit_gamlss_models(
+    counts,
+    design_matrix = "~ condition + gamlss::random(subject)",
+    metadata = metadata,
+    candidate_families = c("PO"),
+    contrast_variable = "condition",
+    workers = 1,
+    show_progress = FALSE
+  )
+
+  expect_s3_class(result$selection, "tbl_df")
+  expect_true(nrow(result$selection) > 0)
+  expect_true("contrasts" %in% names(result))
+})
+
+test_that("fit_gamlss_models accepts formula with gamlss::re fixed+random", {
+  skip_on_cran()
+  skip_if_not_installed("gamlss")
+
+  set.seed(125)
+  counts <- matrix(rpois(180, lambda = 10), nrow = 6, ncol = 30)
+  rownames(counts) <- paste0("gene", 1:6)
+
+  metadata <- data.frame(
+    Type = factor(rep(c("A", "B"), each = 15)),
+    Subject = factor(rep(1:10, length.out = 30))
+  )
+
+  expect_no_error({
+    result <- fit_gamlss_models(
+      counts,
+      design_matrix = "~ gamlss::re(fixed = ~ Type, random = ~ 1 | Subject)",
+      metadata = metadata,
+      candidate_families = c("PO"),
+      contrast_variable = "Type",
+      workers = 1,
+      show_progress = FALSE
+    )
+  })
+
+  expect_s3_class(result$selection, "tbl_df")
+  expect_true(all(c("feature", "best_family") %in% names(result$selection)))
+  expect_true("contrasts" %in% names(result))
+  expect_s3_class(result$contrasts, "tbl_df")
+})
+
+test_that("fit_gamlss_models accepts formula with fixed term + gamlss::re random", {
+  skip_on_cran()
+  skip_if_not_installed("gamlss")
+
+  set.seed(126)
+  counts <- matrix(rpois(180, lambda = 10), nrow = 6, ncol = 30)
+  rownames(counts) <- paste0("gene", 1:6)
+
+  metadata <- data.frame(
+    Type = factor(rep(c("A", "B"), each = 15)),
+    Subject = factor(rep(1:10, length.out = 30))
+  )
+
+  expect_no_error({
+    result <- fit_gamlss_models(
+      counts,
+      design_matrix = "~ Type + gamlss::re(random = ~ 1 | Subject)",
+      metadata = metadata,
+      candidate_families = c("PO"),
+      contrast_variable = "Type",
+      workers = 1,
+      show_progress = FALSE
+    )
+  })
+
+  expect_s3_class(result$selection, "tbl_df")
+  expect_true(all(c("feature", "best_family") %in% names(result$selection)))
+  expect_true("contrasts" %in% names(result))
+  expect_s3_class(result$contrasts, "tbl_df")
+})
+
 test_that("fit_gamlss_models auto-generates contrasts from contrast_variable", {
   skip_on_cran()
   

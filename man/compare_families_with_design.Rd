@@ -13,7 +13,9 @@ compare_families_with_design(
   min_n = 5,
   bd_vec = NULL,
   transform_mode = "strict",
-  extract_coef_fn = NULL
+  extract_coef_fn = NULL,
+  formula_mu = NULL,
+  metadata_df = NULL
 )
 }
 \arguments{
@@ -32,6 +34,12 @@ compare_families_with_design(
 \item{bd_vec}{Optional binomial denominator vector.}
 
 \item{transform_mode}{Character: "strict" or "safe" transformation mode.}
+
+\item{formula_mu}{Optional model formula for direct GAMLSS fitting
+(e.g., `y ~ condition + random(subject)`). When provided, covariates are
+taken from `metadata_df` and `design_df` is ignored for model fitting.}
+
+\item{metadata_df}{Optional metadata data.frame used with `formula_mu`.}
 }
 \value{
 List with comparisons tibble.

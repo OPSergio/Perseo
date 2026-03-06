@@ -161,6 +161,11 @@ wald_omnibus_test <- function(beta, V, factor_coefs) {
 #' @param family GAMLSS family string.
 #' @param transform_mode "strict" or "safe".
 #' @param bd_vec Optional binomial denominator vector.
+#' @param formula_mu Optional full model formula (response must be `y`) for
+#'   direct GAMLSS fitting.
+#' @param metadata_df Optional metadata data.frame used with `formula_mu`.
+#' @param contrast_variable Optional variable name used to define reduced model
+#'   when `formula_mu` is provided.
 #'
 #' @return List with:
 #'   \describe{
@@ -179,7 +184,10 @@ lrt_omnibus_test <- function(feature_vec,
                             factor_coefs,
                             family,
                             transform_mode = "strict",
-                            bd_vec = NULL) {
+                            bd_vec = NULL,
+                            formula_mu = NULL,
+                            metadata_df = NULL,
+                            contrast_variable = NULL) {
   # Transform response
   tr <- tryCatch({
     transform_response(feature_vec, family, mode = transform_mode)
@@ -197,29 +205,64 @@ lrt_omnibus_test <- function(feature_vec,
   }
   
   y <- tr$y[tr$mask]
-  design_subset <- design_mat[tr$mask, , drop = FALSE]
-  
-  # Identify columns for reduced model
-  all_cols <- colnames(design_subset)
-  reduced_cols <- setdiff(all_cols, factor_coefs)
-  
-  if (length(reduced_cols) == 0) {
-    # Can't fit reduced model (would be empty or intercept-only without data)
-    return(list(
-      statistic = NA_real_,
-      df = NA_integer_,
-      p_value = NA_real_,
-      test_type = "LRT"
-    ))
+
+  use_formula <- !is.null(formula_mu)
+  if (use_formula) {
+    if (is.null(metadata_df) || !is.data.frame(metadata_df)) {
+      return(list(
+        statistic = NA_real_,
+        df = NA_integer_,
+        p_value = NA_real_,
+        test_type = "LRT"
+      ))
+    }
+    if (is.null(contrast_variable) || !is.character(contrast_variable) || length(contrast_variable) != 1) {
+      return(list(
+        statistic = NA_real_,
+        df = NA_integer_,
+        p_value = NA_real_,
+        test_type = "LRT"
+      ))
+    }
+
+    metadata_subset <- metadata_df[tr$mask, , drop = FALSE]
+    data_full <- cbind.data.frame(y = y, metadata_subset)
+
+    terms_obj <- stats::terms(formula_mu)
+    term_labels <- attr(terms_obj, "term.labels")
+    has_intercept <- attr(terms_obj, "intercept")
+    var_pattern <- paste0("(^|[^[:alnum:]_])", contrast_variable, "([^[:alnum:]_]|$)")
+    reduced_terms <- term_labels[!grepl(var_pattern, term_labels)]
+
+    reduced_formula <- stats::reformulate(
+      termlabels = reduced_terms,
+      response = "y",
+      intercept = has_intercept
+    )
+    environment(reduced_formula) <- environment(formula_mu)
+  } else {
+    design_subset <- design_mat[tr$mask, , drop = FALSE]
+
+    all_cols <- colnames(design_subset)
+    reduced_cols <- setdiff(all_cols, factor_coefs)
+
+    if (length(reduced_cols) == 0) {
+      # Can't fit reduced model (would be empty or intercept-only without data)
+      return(list(
+        statistic = NA_real_,
+        df = NA_integer_,
+        p_value = NA_real_,
+        test_type = "LRT"
+      ))
+    }
+
+    design_full <- design_subset
+    design_reduced <- design_subset[, reduced_cols, drop = FALSE]
+
+    data_full <- cbind.data.frame(y = y, design_full)
+    data_reduced <- cbind.data.frame(y = y, design_reduced)
+    reduced_formula <- y ~ .
   }
-  
-  # Create design matrices
-  design_full <- design_subset
-  design_reduced <- design_subset[, reduced_cols, drop = FALSE]
-  
-  # Prepare data
-  data_full <- cbind.data.frame(y = y, design_full)
-  data_reduced <- cbind.data.frame(y = y, design_reduced)
   
   # Instantiate family
   fam_obj <- tryCatch({
@@ -243,10 +286,10 @@ lrt_omnibus_test <- function(feature_vec,
   }
   
   # Fit full model
-  fit_full <- fit_gamlss_safely(y ~ ., data = data_full, family_obj = fam_obj)
+  fit_full <- fit_gamlss_safely(if (use_formula) formula_mu else y ~ ., data = data_full, family_obj = fam_obj)
   
   # Fit reduced model
-  fit_reduced <- fit_gamlss_safely(y ~ ., data = data_reduced, family_obj = fam_obj)
+  fit_reduced <- fit_gamlss_safely(reduced_formula, data = if (use_formula) data_full else data_reduced, family_obj = fam_obj)
   
   if (is.null(fit_full) || is.null(fit_reduced)) {
     return(list(

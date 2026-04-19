@@ -432,12 +432,18 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
 
 ---
 
-```{r contrasts-section, results='asis', eval=has_contrasts}
+```{r contrasts-section, results='asis'}
 cat("# 4 — Contrasts {.tabset}\n\n")
-cat("> **Pairwise group comparisons computed via linear contrasts.**\n")
-cat("> Each tab shows an interactive Volcano plot (LFC vs &minus;log&#x2081;&#x2080; p-adj)\n")
-cat("> and an MA plot for one contrast. Hover over any point to inspect the\n")
-cat("> feature name, LFC and adjusted p-value. The table lists the top 50 hits.\n\n")
+if (has_contrasts) {
+  cat("> **Pairwise group comparisons computed via linear contrasts.**\n")
+  cat("> Each tab shows an interactive Volcano plot (LFC vs &minus;log&#x2081;&#x2080; p-adj)\n")
+  cat("> and an MA plot for one contrast. Hover over any point to inspect the\n")
+  cat("> feature name, LFC and adjusted p-value. The table lists the top 50 hits.\n\n")
+} else {
+  cat("> **No contrasts were computed in this analysis.**\n")
+  cat("> To enable this section, pass `contrast_variable` or `contrast_matrix`\n")
+  cat("> to `run_perseo()`. Example: `run_perseo(..., contrast_variable = \"group\")`.\n\n")
+}
 ```
 
 ```{r contrast-tabs, results='asis', eval=has_contrasts}
@@ -450,33 +456,54 @@ for (cname in unique(contrasts_df$contrast)) {
                   by = "feature", all.x = TRUE)
 
   n_sig_c <- sum(!is.na(df_c$p_adj) & df_c$p_adj < 0.05)
-  cat(sprintf("**%d significant features** (FDR < 5%%) out of %d tested.\n\n",
+  cat(sprintf("**%d significant features** (FDR &lt; 5%%) out of %d tested.\n\n",
               n_sig_c, nrow(df_c)))
 
-  cat("### Volcano Plot\n\n")
-  print(tagList(as_girafe(make_volcano(df_c))))
-  cat("\n\n")
+  # Volcano
+  tryCatch({
+    cat("**Volcano plot** — log fold change vs. &minus;log&#x2081;&#x2080;(p-adj).\n\n")
+    print(tagList(as_girafe(make_volcano(df_c))))
+    cat("\n\n")
+  }, error = function(e) {
+    cat(sprintf("> *Volcano plot could not be rendered: %s*\n\n",
+                conditionMessage(e)))
+  })
 
-  cat("### MA Plot\n\n")
-  print(tagList(as_girafe(make_ma(df_c))))
-  cat("\n\n")
+  # MA
+  tryCatch({
+    cat("**MA plot** — mean expression vs. log fold change.\n\n")
+    print(tagList(as_girafe(make_ma(df_c))))
+    cat("\n\n")
+  }, error = function(e) {
+    cat(sprintf("> *MA plot could not be rendered: %s*\n\n",
+                conditionMessage(e)))
+  })
 
-  cat("### Top hits\n\n")
-  top_tbl <- df_c %>%
-    filter(!is.na(p_adj)) %>%
-    arrange(p_adj) %>%
-    head(50) %>%
-    mutate(across(c(estimate, se), ~ round(., 4)),
-           z       = round(z, 3),
-           p_value = signif(p_value, 3),
-           p_adj   = signif(p_adj, 3)) %>%
-    select(any_of(c("feature", "estimate", "se", "z", "p_value", "p_adj")))
-  print(tagList(
-    datatable(top_tbl, rownames = FALSE,
-              caption = paste0("Top 50 features — ", cname),
-              options = list(pageLength = 10, dom = "tip", scrollX = TRUE))
-  ))
-  cat("\n\n")
+  # Top hits table
+  tryCatch({
+    cat("**Top hits** (up to 50 features with lowest adjusted p-value).\n\n")
+    top_tbl <- df_c %>%
+      filter(!is.na(p_adj)) %>%
+      arrange(p_adj) %>%
+      head(50) %>%
+      mutate(
+        across(any_of(c("estimate", "se")), ~ round(., 4)),
+        across(any_of("z"),       ~ round(., 3)),
+        across(any_of("p_value"), ~ signif(., 3)),
+        across(any_of("p_adj"),   ~ signif(., 3))
+      ) %>%
+      select(any_of(c("feature", "estimate", "se", "z", "p_value", "p_adj",
+                      "best_family")))
+    print(tagList(
+      datatable(top_tbl, rownames = FALSE,
+                caption = paste0("Top features — ", cname),
+                options = list(pageLength = 10, dom = "tip", scrollX = TRUE))
+    ))
+    cat("\n\n")
+  }, error = function(e) {
+    cat(sprintf("> *Top-hits table could not be rendered: %s*\n\n",
+                conditionMessage(e)))
+  })
 }
 ```
 

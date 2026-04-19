@@ -8,8 +8,12 @@
 #' This is the recommended entry point for end-to-end analyses.
 #'
 #' @param counts_matrix Numeric matrix (features × samples) with rownames as feature IDs.
-#' @param design_matrix Data frame or matrix with covariates (samples × predictors).
-#'   Will be cleaned automatically (intercept column removed, dimension validated).
+#' @param design_matrix Covariates specification. Accepts three forms:
+#'   (1) a numeric matrix (samples × predictors) from \code{model.matrix()};
+#'   (2) a formula string such as \code{"~ group + batch"} — requires
+#'   \code{metadata}; or (3) an R \code{formula} object. When a formula string
+#'   or formula is supplied, \code{metadata} must be provided and
+#'   \code{contrast_variable} can be used for automatic contrast generation.
 #' @param contrast_matrix Optional numeric matrix where each row defines a linear
 #'   combination of mu coefficients. Column names must match coefficient names from
 #'   the design matrix. If provided, contrasts are computed and adjusted for multiple
@@ -41,6 +45,23 @@
 #'   both family selection and differential expression.
 #' @param show_progress Logical, show progress messages and reports (default: TRUE).
 #' @param seed Integer or NULL, random seed for reproducibility (default: NULL).
+#' @param metadata Data frame of sample metadata; required when design_matrix is a
+#'   formula string or when contrast_variable is used (default: NULL).
+#' @param contrast_variable Character string naming a factor column in metadata for
+#'   which all pairwise contrasts are auto-generated (default: NULL). Requires metadata.
+#' @param omnibus Logical, whether to run an omnibus test before computing contrasts
+#'   (default: FALSE). Requires contrasts (contrast_matrix or contrast_variable).
+#' @param omnibus_threshold Numeric, p-value threshold for omnibus test pass/fail
+#'   (default: 0.05). Only features that pass proceed to contrast computation.
+#' @param omnibus_test Character, omnibus test type: "Wald" or "LRT" (default: "Wald").
+#' @param parallel Logical, whether to parallelize feature-level fitting (default: FALSE).
+#'   Requires the `future` and `future.apply` packages.
+#' @param workers Integer, number of parallel workers (default: NULL = all available cores).
+#'   Only used when parallel = TRUE.
+#' @param thr_zero Numeric, zero-inflation evidence threshold for family filtering in
+#'   family selection step (default: 0.005).
+#' @param thr_one Numeric, one-inflation evidence threshold for family filtering in
+#'   family selection step (default: 0.005).
 #'
 #' @return List with three components:
 #' \describe{
@@ -120,11 +141,38 @@
 #' # View contrast results
 #' sig_contrasts <- results_contrasts$differential_expression$contrasts %>%
 #'   filter(p_adj < 0.05)
+#'
+#' # Formula + automatic contrasts (simpler interface)
+#' metadata <- data.frame(
+#'   group = factor(rep(c("Control", "TreatA", "TreatB"), each = 20))
+#' )
+#' results2 <- run_perseo(
+#'   counts_matrix     = counts,
+#'   design_matrix     = "~ group",
+#'   metadata          = metadata,
+#'   contrast_variable = "group",   # auto-generates all pairwise contrasts
+#'   n_genes           = 150,
+#'   n_boot            = 8,
+#'   top_n             = 4,
+#'   criterion         = "BIC",
+#'   p_adjust_method   = "BH",
+#'   seed              = 42
+#' )
+#'
+#' # Visualise results
+#' plot_volcano(results2, contrast = "TreatA_vs_Control", label_top = 15)
+#' plot_ma(results2, contrast = "TreatA_vs_Control", counts_matrix = counts)
+#'
+#' # Generate interactive HTML report
+#' report_perseo(results2, output_file = "analysis.html", open = TRUE)
 #' }
 #'
 #' @seealso
 #' \code{\link{find_families}} for family selection details.
 #' \code{\link{fit_gamlss_models}} for differential expression fitting.
+#' \code{\link{plot_volcano}} for volcano plots.
+#' \code{\link{plot_ma}} for MA plots.
+#' \code{\link{report_perseo}} for interactive HTML reports.
 #'
 #' @export
 run_perseo <- function(counts_matrix,
@@ -144,11 +192,21 @@ run_perseo <- function(counts_matrix,
                        p_adjust_method = "BH",
                        transform_mode = NULL,
                        show_progress = TRUE,
-                       seed = NULL) {
+                       seed = NULL,
+                       metadata = NULL,
+                       contrast_variable = NULL,
+                       omnibus = FALSE,
+                       omnibus_threshold = 0.05,
+                       omnibus_test = c("Wald", "LRT"),
+                       parallel = FALSE,
+                       workers = NULL,
+                       thr_zero = 0.005,
+                       thr_one = 0.005) {
   
   # ---- Argument validation ----
   criterion <- match.arg(criterion)
-  
+  omnibus_test <- match.arg(omnibus_test)
+
   if (!p_adjust_method %in% c("holm", "hochberg", "hommel", "bonferroni", "BH", "BY", "fdr", "none")) {
     stop(
       "p_adjust_method must be one of: 'holm', 'hochberg', 'hommel', ",
@@ -178,7 +236,11 @@ run_perseo <- function(counts_matrix,
     criterion = criterion,
     gaic_k = gaic_k,
     filter_beta_inflated = filter_beta_inflated,
-    transform_mode = transform_mode
+    transform_mode = transform_mode,
+    thr_zero = thr_zero,
+    thr_one = thr_one,
+    parallel = parallel,
+    workers = workers
   )
   
   # Extract selected families
@@ -217,14 +279,21 @@ run_perseo <- function(counts_matrix,
   de_results <- fit_gamlss_models(
     counts_matrix = counts_matrix,
     design_matrix = design_matrix,
+    metadata = metadata,
     candidate_families = selected_families,
     criterion = criterion,
     gaic_k = gaic_k,
     min_n = min_n,
     contrast_matrix = contrast_matrix,
+    contrast_variable = contrast_variable,
+    omnibus = omnibus,
+    omnibus_threshold = omnibus_threshold,
+    omnibus_test = omnibus_test,
     p_adjust = "none",  # We'll do global adjustment below
     show_progress = show_progress,
-    transform_mode = family_results$transform_mode
+    transform_mode = family_results$transform_mode,
+    parallel = parallel,
+    workers = workers
   )
   
   # ---- Step 3: Multiple Testing Correction ----
@@ -284,17 +353,40 @@ run_perseo <- function(counts_matrix,
   }
   
   summary_info <- list(
-    n_features_total = nrow(counts_matrix),
-    n_samples = ncol(counts_matrix),
-    n_features_sampled = n_genes,
-    n_bootstrap_pulls = n_boot,
-    families_selected = selected_families,
+    # Data dimensions
+    n_features_total    = nrow(counts_matrix),
+    n_samples           = ncol(counts_matrix),
+    # Family selection
+    bootstrap           = bootstrap,
+    n_features_sampled  = n_genes,
+    n_bootstrap_pulls   = n_boot,
+    top_n               = top_n,
+    group_by_support    = group_by_support,
+    thr_zero            = thr_zero,
+    thr_one             = thr_one,
+    families_candidate  = if (!is.null(families)) families else "default",
+    families_selected   = selected_families,
     n_families_selected = length(selected_families),
-    criterion = criterion,
-    transform_mode = family_results$transform_mode,
-    models_fitted = n_models_fitted,
-    p_adjust_method = p_adjust_method,
-    status = "completed"
+    # Model fitting
+    criterion           = criterion,
+    gaic_k              = if (!is.null(gaic_k)) gaic_k else paste0("log(n) = ", round(log(ncol(counts_matrix)), 2)),
+    transform_mode      = family_results$transform_mode,
+    min_n               = min_n,
+    models_fitted       = n_models_fitted,
+    # Contrasts & omnibus
+    has_contrast_matrix   = !is.null(contrast_matrix),
+    contrast_variable     = if (!is.null(contrast_variable)) contrast_variable else "none",
+    omnibus               = omnibus,
+    omnibus_test          = if (omnibus) omnibus_test else "—",
+    omnibus_threshold     = if (omnibus) omnibus_threshold else "—",
+    # Multiple testing
+    p_adjust_method     = p_adjust_method,
+    # Parallelisation
+    parallel            = parallel,
+    workers             = if (parallel && !is.null(workers)) workers else "—",
+    # Execution
+    run_timestamp       = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
+    status              = "completed"
   )
   
   if (show_progress) {

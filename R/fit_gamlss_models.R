@@ -978,26 +978,28 @@ print_final_report <- function(vars) {
       }
     }
     
-    # Coefficient statistics
+    # Coefficient statistics — exclude intercept (always significant by definition)
     if (nrow(results_df) > 0) {
-      n_coefs <- nrow(results_df)
-      n_sig <- sum(results_df$padj < 0.05, na.rm = TRUE)
+      results_no_intercept <- results_df %>%
+        dplyr::filter(term != "(Intercept)")
+      n_coefs <- nrow(results_no_intercept)
+      n_sig <- sum(results_no_intercept$padj < 0.05, na.rm = TRUE)
       sig_rate <- if (n_coefs > 0) n_sig / n_coefs * 100 else 0
-      
+
       if (has_cli) {
-        cli::cli_h2("Coefficient Results")
+        cli::cli_h2("Coefficient Results (excluding intercept)")
         cli::cli_ul(c(
           "Total coefficients  : {.val {n_coefs}}",
           "Significant (FDR<5%): {.val {n_sig}} ({.val {sprintf('%.1f%%', sig_rate)}})"
         ))
       } else {
-        message("\nCoefficient Results:")
+        message("\nCoefficient Results (excluding intercept):")
         message("  Total coefficients  : ", n_coefs)
         message("  Significant (FDR<5%): ", n_sig, " (", sprintf("%.1f%%", sig_rate), ")")
       }
-      
-      # Per-term breakdown
-      term_summary <- results_df %>%
+
+      # Per-term breakdown (intercept excluded)
+      term_summary <- results_no_intercept %>%
         dplyr::group_by(term) %>%
         dplyr::summarize(
           n_total = dplyr::n(),

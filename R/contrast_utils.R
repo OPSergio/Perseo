@@ -167,26 +167,16 @@ build_contrast_matrix <- function(var_name, metadata, design_matrix) {
     contrast_vec <- rep(0, length(coef_names))
     names(contrast_vec) <- coef_names
     
-    # Determine coefficient names for each level
-    # First level (reference) has no coefficient (absorbed in intercept)
-    coef1 <- if (pair[1] == 1) {
-      "(Intercept)"
-    } else {
-      paste0(var_name, level1)
+    # In treatment coding, the reference level (pair[1]==1) is absorbed into the
+    # intercept, so mu_B - mu_A = beta_B (the intercept cancels). Only subtract
+    # for non-reference levels.
+    if (pair[1] != 1) {
+      coef1 <- paste0(var_name, level1)
+      if (coef1 %in% coef_names) contrast_vec[coef1] <- -1
     }
-    
-    coef2 <- if (pair[2] == 1) {
-      "(Intercept)"
-    } else {
-      paste0(var_name, level2)
-    }
-    
-    # Set contrast: level2 - level1
-    if (coef1 %in% coef_names) {
-      contrast_vec[coef1] <- -1
-    }
-    if (coef2 %in% coef_names) {
-      contrast_vec[coef2] <- 1
+    if (pair[2] != 1) {
+      coef2 <- paste0(var_name, level2)
+      if (coef2 %in% coef_names) contrast_vec[coef2] <- 1
     }
     
     list(

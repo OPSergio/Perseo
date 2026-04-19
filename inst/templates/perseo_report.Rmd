@@ -1,0 +1,514 @@
+---
+title: "`r params$report_title`"
+output:
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    self_contained: true
+params:
+  result: NULL
+  report_title: "PERSEO Analysis Report"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.align = "center")
+
+library(htmltools)
+library(ggiraph)
+library(ggplot2)
+library(DT)
+library(dplyr)
+
+result <- params$result
+de     <- result$differential_expression
+fs     <- result$family_selection
+smry   <- result$summary
+
+has_contrasts <- !is.null(de$contrasts) && nrow(de$contrasts) > 0
+has_omnibus   <- !is.null(de$omnibus)   && nrow(de$omnibus)   > 0
+
+pkg_version <- tryCatch(as.character(utils::packageVersion("PERSEO")),
+                        error = function(e) "dev")
+
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# ---- Shared plot helpers ---------------------------------------------------
+
+.perseo_colours <- c("Not sig" = "#AAAAAA", "LFC only" = "#4E9FD4",
+                     "FDR only" = "#F4A460", "Sig & LFC" = "#C0392B")
+
+theme_rmd <- function(base_size = 11) {
+  ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.border     = ggplot2::element_rect(colour = "#CCCCCC", fill = NA,
+                                               linewidth = 0.4),
+      strip.background = ggplot2::element_rect(fill = "#F5F5F5", colour = "#CCCCCC"),
+      legend.position  = "right",
+      plot.title       = ggplot2::element_text(face = "bold"),
+      axis.title       = ggplot2::element_text(face = "bold"),
+      plot.caption     = ggplot2::element_text(colour = "#888888", size = 8)
+    )
+}
+
+make_volcano <- function(df_c, fdr = 0.05, lfc = 1) {
+  df_c$neg_log10 <- -log10(pmax(df_c$p_adj, 1e-300))
+  df_c$sig_cat   <- dplyr::case_when(
+    !is.finite(df_c$estimate) | !is.finite(df_c$p_adj)    ~ "Not sig",
+    df_c$p_adj < fdr & abs(df_c$estimate) >= lfc           ~ "Sig & LFC",
+    df_c$p_adj < fdr                                       ~ "FDR only",
+    abs(df_c$estimate) >= lfc                              ~ "LFC only",
+    TRUE                                                   ~ "Not sig"
+  )
+  df_c$sig_cat <- factor(df_c$sig_cat,
+                         levels = c("Not sig", "LFC only", "FDR only", "Sig & LFC"))
+  df_c$tooltip <- paste0("<b>", df_c$feature, "</b><br/>LFC: ",
+                         round(df_c$estimate, 3), "<br/>p-adj: ",
+                         signif(df_c$p_adj, 3))
+  df_c$data_id <- df_c$feature
+  ggplot2::ggplot(df_c, ggplot2::aes(x = estimate, y = neg_log10,
+                                     colour = sig_cat,
+                                     tooltip = tooltip, data_id = data_id)) +
+    ggiraph::geom_point_interactive(size = 1.6, alpha = 0.7, na.rm = TRUE) +
+    ggplot2::geom_vline(xintercept = c(-lfc, lfc), linetype = "dashed",
+                        colour = "#555555", linewidth = 0.4) +
+    ggplot2::geom_hline(yintercept = -log10(fdr), linetype = "dashed",
+                        colour = "#555555", linewidth = 0.4) +
+    ggplot2::scale_colour_manual(values = .perseo_colours, name = NULL, drop = FALSE) +
+    ggplot2::labs(x = "Log Fold Change", y = expression(-log[10](p[adj])),
+                  caption = paste0("FDR < ", fdr, "  |  |LFC| \u2265 ", lfc)) +
+    theme_rmd()
+}
+
+make_ma <- function(df_c, fdr = 0.05) {
+  df_c$sig     <- !is.na(df_c$p_adj) & df_c$p_adj < fdr
+  df_c$a_axis  <- if ("mean_expr" %in% names(df_c)) df_c$mean_expr else
+                    rank(-abs(df_c$estimate), ties.method = "first")
+  df_c$tooltip <- paste0("<b>", df_c$feature, "</b><br/>LFC: ",
+                         round(df_c$estimate, 3), "<br/>p-adj: ",
+                         signif(df_c$p_adj, 3))
+  df_c$data_id <- df_c$feature
+  ggplot2::ggplot(df_c, ggplot2::aes(x = a_axis, y = estimate, colour = sig,
+                                     tooltip = tooltip, data_id = data_id)) +
+    ggiraph::geom_point_interactive(size = 1.6, alpha = 0.7, na.rm = TRUE) +
+    ggplot2::geom_hline(yintercept = 0, colour = "#333333", linewidth = 0.5) +
+    ggplot2::scale_colour_manual(
+      values = c("TRUE" = "#C0392B", "FALSE" = "#AAAAAA"),
+      labels = c("TRUE" = paste0("FDR < ", fdr), "FALSE" = "Not sig"),
+      name   = NULL) +
+    ggplot2::labs(x = expression(log[2](Mean~expression + 1)),
+                  y = "Log Fold Change",
+                  caption = paste0("FDR < ", fdr)) +
+    theme_rmd()
+}
+
+as_girafe <- function(gg, w = 7, h = 4.5) {
+  ggiraph::girafe(ggobj = gg, width_svg = w, height_svg = h,
+    options = list(
+      ggiraph::opts_hover(css = "opacity:1;"),
+      ggiraph::opts_tooltip(
+        css = "background:white;border:1px solid #ccc;padding:6px 8px;
+               border-radius:4px;font-size:12px;font-family:sans-serif;"),
+      ggiraph::opts_sizing(rescale = TRUE)))
+}
+```
+
+```{r inline-css, results='asis'}
+# Inline CSS so it works regardless of working directory during render
+css <- "
+body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size:14px;
+       color:#333; line-height:1.6; }
+h1.title { display:none; }
+.perseo-header { display:flex; align-items:center; gap:20px;
+                 padding:20px 0 16px 0; border-bottom:3px solid #2C3E50;
+                 margin-bottom:20px; }
+.perseo-logo   { height:72px; width:auto; flex-shrink:0; }
+.perseo-report-title { margin:0 0 4px 0 !important; font-size:1.7em !important;
+                       font-weight:700 !important; color:#2C3E50 !important;
+                       border:none !important; padding:0 !important; }
+.perseo-subtitle { margin:0; font-size:0.85em; color:#666; letter-spacing:0.02em; }
+.perseo-intro { color:#555; font-size:0.95em; margin-bottom:24px; max-width:860px; }
+.kpi-row { display:flex; flex-wrap:wrap; gap:16px; margin:20px 0; }
+.kpi-box { background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px;
+           padding:16px 24px; min-width:140px; text-align:center; flex:1; }
+.kpi-box.kpi-sig { background:#fff3f3; border-color:#C0392B; }
+.kpi-value { font-size:2em; font-weight:700; color:#2C3E50; line-height:1.1; }
+.kpi-sig .kpi-value { color:#C0392B; }
+.kpi-label { font-size:0.8em; color:#666; margin-top:6px;
+             text-transform:uppercase; letter-spacing:0.05em; }
+.param-table { width:100%; border-collapse:collapse; font-size:0.88em;
+               margin:16px 0 24px 0; }
+.param-table th { background:#2C3E50; color:white; padding:9px 12px;
+                  text-align:left; font-weight:600; letter-spacing:0.03em; }
+.param-table td { padding:7px 12px; vertical-align:top;
+                  border-bottom:1px solid #ecf0f1; }
+.param-table tr:hover td { background:#f8f9fa; }
+.param-section-header td { background:#ecf0f1 !important; font-weight:700;
+                           color:#2C3E50; font-size:0.9em;
+                           text-transform:uppercase; letter-spacing:0.06em;
+                           padding:6px 12px !important; }
+.param-name { font-weight:600; color:#34495E; white-space:nowrap; }
+.param-value code { background:#f0f4f8; border:1px solid #dce3ea; border-radius:3px;
+                    padding:1px 5px; font-size:0.9em; }
+.param-badge { display:inline-block; color:white; border-radius:4px; padding:2px 8px;
+               font-size:0.82em; font-weight:600; letter-spacing:0.03em; }
+.perseo-footer { margin-top:48px; padding-top:16px; border-top:1px solid #dee2e6;
+                 font-size:0.8em; color:#888; text-align:center; }
+.perseo-footer a { color:#2C3E50; text-decoration:none; }
+h1 { color:#2C3E50; border-bottom:2px solid #ecf0f1; padding-bottom:6px; }
+h2 { color:#34495E; }
+"
+cat("<style>", css, "</style>\n")
+```
+
+<!-- ===================== HEADER ===================== -->
+
+```{r header}
+HTML(paste0('
+<div class="perseo-header">
+  <img src="https://raw.githubusercontent.com/OPSergio/Perseo/main/assets/logo_perseo.png"
+       class="perseo-logo" alt="PERSEO">
+  <div class="perseo-header-text">
+    <h1 class="perseo-report-title">', htmlEscape(params$report_title), '</h1>
+    <p class="perseo-subtitle">
+      PERSEO&nbsp;v', pkg_version, '&nbsp;&nbsp;&bull;&nbsp;&nbsp;
+      GAMLSS-based Differential Expression&nbsp;&nbsp;&bull;&nbsp;&nbsp;',
+      format(Sys.time(), "%B %d, %Y"), '
+    </p>
+  </div>
+</div>
+<p class="perseo-intro">
+  This report summarises the results of a <strong>PERSEO</strong> differential
+  expression analysis. The pipeline (1)&nbsp;selects the best-fitting GAMLSS
+  distributional family per genomic feature via bootstrap sampling with
+  Jacobian-corrected IC comparison, (2)&nbsp;fits feature-level models with the
+  selected families, and (3)&nbsp;adjusts p-values for multiple testing. Use the
+  table of contents on the left to navigate between sections.
+</p>
+'))
+```
+
+---
+
+# 0 — Analysis Parameters
+
+> **Full record of all parameters used in this analysis**, intended for
+> reproducibility and methods reporting. Each parameter is shown alongside a
+> brief explanation of its role in the pipeline.
+
+```{r params-table}
+s <- smry
+
+badge <- function(val, tl = "Yes", fl = "No",
+                  tc = "#27AE60", fc = "#888888") {
+  col   <- if (isTRUE(val)) tc else fc
+  label <- if (isTRUE(val)) tl else fl
+  sprintf('<span class="param-badge" style="background:%s">%s</span>', col, label)
+}
+
+prow <- function(name, value, desc) {
+  vstr <- if (is.character(value) || is.numeric(value))
+    paste0('<code>', paste(as.character(value), collapse = ", "), '</code>')
+  else value
+  paste0('<tr><td class="param-name">', name, '</td>',
+         '<td class="param-value">', vstr, '</td>',
+         '<td class="param-desc">',  desc, '</td></tr>')
+}
+
+ph <- function(label)
+  paste0('<tr class="param-section-header"><td colspan="3">', label, '</td></tr>')
+
+tm_desc <- switch(s$transform_mode %||% "strict",
+  "strict" = "Only uses families whose support exactly matches the data range
+              (e.g. count families for non-negative integers). Safest choice
+              for heterogeneous omics data.",
+  "safe"   = "Broader family matching with log/logit rescaling where needed.
+              More permissive; suitable when support mismatches are expected.",
+  s$transform_mode)
+
+crit_desc <- switch(s$criterion %||% "GAIC",
+  "GAIC" = paste0("Generalised AIC with penalty k = ", s$gaic_k,
+                  ". Balances fit and complexity; recommended for omics."),
+  "BIC"  = "Bayesian Information Criterion — stronger complexity penalty than AIC.",
+  "AIC"  = "Akaike Information Criterion — standard penalised likelihood.",
+  s$criterion)
+
+padj_desc <- switch(s$p_adjust_method %||% "BH",
+  "BH"         = "Benjamini-Hochberg FDR control. Recommended for high-dimensional data.",
+  "bonferroni" = "Bonferroni correction. Very conservative for large feature sets.",
+  "none"       = "No adjustment applied.",
+  s$p_adjust_method)
+
+rows <- paste0(
+  ph("Data"),
+  prow("Features", format(s$n_features_total, big.mark = ","),
+       "Total genomic features in the input counts matrix."),
+  prow("Samples", format(s$n_samples, big.mark = ","),
+       "Total samples (columns) in the counts matrix."),
+  ph("Family Selection"),
+  prow("Bootstrap", badge(s$bootstrap),
+       "<strong>Yes</strong>: families evaluated on random feature subsets
+        (n_genes &times; n_boot pulls). Faster and more robust.
+        <strong>No</strong>: all features evaluated (comprehensive but slow)."),
+  prow("Features per pull (n_genes)", s$n_features_sampled,
+       "Features randomly sampled per bootstrap pull."),
+  prow("Bootstrap pulls (n_boot)", s$n_bootstrap_pulls,
+       "Independent resamples. More pulls &rarr; more stable frequency estimates."),
+  prow("Top N families (top_n)", s$top_n,
+       "Top-ranked families passed to the differential expression step."),
+  prow("Group by support", badge(s$group_by_support),
+       "Restricts candidates to families whose mathematical domain is compatible
+        with observed data range per feature."),
+  prow("Zero-inflation threshold", s$thr_zero,
+       "Min proportion of exact zeros to consider zero-inflated families (ZIP, ZINBI)."),
+  prow("One-inflation threshold", s$thr_one,
+       "Min proportion of exact ones to consider one-inflated families (BEINF)."),
+  prow("Candidate families",
+       if (identical(s$families_candidate, "default")) "Default set"
+       else paste(s$families_candidate, collapse = ", "),
+       "Distributional families evaluated during bootstrap family selection."),
+  prow("Selected families", paste(s$families_selected, collapse = ", "),
+       "Families used for differential expression model fitting."),
+  ph("Model Fitting"),
+  prow("Information criterion", s$criterion, crit_desc),
+  prow("Transform mode", paste0('<code>', s$transform_mode, '</code>'), tm_desc),
+  prow("Min. valid observations (min_n)", s$min_n,
+       "Features with fewer valid observations are skipped."),
+  ph("Contrasts &amp; Omnibus Test"),
+  prow("Contrast matrix supplied", badge(s$has_contrast_matrix),
+       "Whether a user-defined numeric contrast matrix was provided."),
+  prow("Contrast variable", s$contrast_variable,
+       "Variable for which all pairwise contrasts are auto-generated.
+        <code>none</code> = manual matrix or no contrasts."),
+  prow("Omnibus test", badge(s$omnibus),
+       "<strong>Yes</strong>: joint Wald/LRT test run before contrasts;
+        only features that pass proceed to pairwise comparisons."),
+  prow("Omnibus test type",  as.character(s$omnibus_test),
+       "Wald (fast) or Likelihood Ratio Test (more robust for small n)."),
+  prow("Omnibus threshold", as.character(s$omnibus_threshold),
+       "p-value cut-off for the omnibus gatekeeper filter."),
+  ph("Multiple Testing Correction"),
+  prow("Method", s$p_adjust_method, padj_desc),
+  ph("Parallelisation"),
+  prow("Parallel", badge(s$parallel),
+       "Feature-level fitting parallelised via the <code>future</code> backend."),
+  prow("Workers", as.character(s$workers),
+       "Parallel workers used. <code>&mdash;</code> when disabled."),
+  ph("Execution"),
+  prow("Run timestamp", s$run_timestamp %||% "&mdash;",
+       "Date and time the analysis was executed."),
+  prow("PERSEO version", pkg_version,
+       "Package version used to generate this report.")
+)
+
+HTML(paste0(
+  '<table class="param-table">',
+  '<thead><tr>',
+  '<th style="width:22%">Parameter</th>',
+  '<th style="width:18%">Value</th>',
+  '<th>Description</th>',
+  '</tr></thead>',
+  '<tbody>', rows, '</tbody>',
+  '</table>'
+))
+```
+
+---
+
+# 1 — Summary
+
+> **Overview of the PERSEO pipeline results.** KPI cards summarise the key
+> counts from the analysis.
+
+```{r kpis}
+results_df   <- de$results   %||% data.frame()
+contrasts_df <- de$contrasts %||% data.frame()
+
+n_features <- nrow(de$selection %||% data.frame())
+n_sig <- if (nrow(results_df) > 0 && "p_adj" %in% names(results_df)) {
+  r <- results_df[results_df$term != "(Intercept)", ]
+  length(unique(r$feature[!is.na(r$p_adj) & r$p_adj < 0.05]))
+} else 0L
+
+n_families  <- length(fs$top_families_overall)
+n_contrasts <- if (has_contrasts) length(unique(contrasts_df$contrast)) else 0L
+
+kpi <- function(value, label, sig = FALSE) {
+  cls <- if (sig) "kpi-box kpi-sig" else "kpi-box"
+  paste0('<div class="', cls, '">',
+         '<div class="kpi-value">', value, '</div>',
+         '<div class="kpi-label">', label, '</div>',
+         '</div>')
+}
+
+HTML(paste0(
+  '<div class="kpi-row">',
+  kpi(format(n_features, big.mark = ","),  "Features tested"),
+  kpi(format(n_sig,      big.mark = ","),  "Significant features<br><small>(FDR &lt; 5%)</small>", sig = TRUE),
+  kpi(n_families,                          "Families selected"),
+  kpi(n_contrasts,                         "Contrasts computed"),
+  '</div>'
+))
+```
+
+---
+
+# 2 — Family Selection
+
+> **Distribution of best-fitting GAMLSS families across all features.** PERSEO
+> evaluates multiple candidate families and selects the one with the lowest
+> Jacobian-corrected information criterion per feature. Hover over bars for
+> exact counts.
+
+```{r family-barplot, fig.height=4}
+sel_df <- de$selection
+if (!is.null(sel_df) && nrow(sel_df) > 0 && "best_family" %in% names(sel_df)) {
+  fam_counts <- sel_df %>%
+    count(Family = best_family, name = "n") %>%
+    arrange(desc(n)) %>%
+    mutate(pct     = n / sum(n) * 100,
+           tooltip = paste0("<b>", Family, "</b><br/>n = ", n,
+                            " (", round(pct, 1), "%)"),
+           data_id = Family)
+
+  gg <- ggplot2::ggplot(fam_counts,
+           ggplot2::aes(x = reorder(Family, n), y = n, fill = Family,
+                        tooltip = tooltip, data_id = data_id)) +
+    ggiraph::geom_col_interactive(width = 0.7, show.legend = FALSE) +
+    ggplot2::coord_flip() +
+    ggplot2::scale_fill_viridis_d(option = "D", begin = 0.2, end = 0.85) +
+    ggplot2::labs(x = NULL, y = "Number of features") +
+    theme_rmd()
+
+  as_girafe(gg, w = 7, h = max(3, 0.4 * nrow(fam_counts) + 1))
+}
+```
+
+```{r family-table}
+if (!is.null(sel_df) && nrow(sel_df) > 0 && "best_family" %in% names(sel_df)) {
+  fam_tbl <- sel_df %>%
+    count(Family = best_family, name = "Count") %>%
+    arrange(desc(Count)) %>%
+    mutate(Proportion = paste0(round(Count / sum(Count) * 100, 1), "%"))
+  datatable(fam_tbl, rownames = FALSE,
+            caption = "Selected family frequencies",
+            options = list(pageLength = 10, dom = "tip"))
+}
+```
+
+---
+
+# 3 — Differential Expression
+
+> **Coefficient-level results for all features and model terms.** Each row is
+> one feature-term combination. The `effect` column contains the estimated
+> coefficient on the link scale. Use the column filters to drill down by
+> feature, term, or family.
+
+```{r de-table}
+if (!is.null(results_df) && nrow(results_df) > 0) {
+  display_cols <- intersect(
+    c("feature", "term", "effect", "pval", "padj", "p_adj", "best_family", "family"),
+    names(results_df))
+  dt_df <- results_df[, display_cols, drop = FALSE]
+  for (col in intersect(c("effect", "pval", "padj", "p_adj"), names(dt_df)))
+    dt_df[[col]] <- signif(dt_df[[col]], 4)
+
+  datatable(dt_df, rownames = FALSE, filter = "top",
+            caption = "Differential expression results (all terms)",
+            options  = list(pageLength = 15, scrollX = TRUE,
+                            dom = "lBfrtip", buttons = list("csv", "excel")),
+            extensions = "Buttons") %>%
+    formatStyle(columns    = intersect(c("padj", "p_adj"), names(dt_df)),
+                background = styleInterval(c(0.01, 0.05),
+                                           c("#ffe6e6", "#fff3e6", "white")))
+}
+```
+
+---
+
+```{r contrasts-section, results='asis', eval=has_contrasts}
+cat("# 4 — Contrasts {.tabset}\n\n")
+cat("> **Pairwise group comparisons computed via linear contrasts.**\n")
+cat("> Each tab shows an interactive Volcano plot (LFC vs &minus;log&#x2081;&#x2080; p-adj)\n")
+cat("> and an MA plot for one contrast. Hover over any point to inspect the\n")
+cat("> feature name, LFC and adjusted p-value. The table lists the top 50 hits.\n\n")
+```
+
+```{r contrast-tabs, results='asis', eval=has_contrasts}
+for (cname in unique(contrasts_df$contrast)) {
+  cat(sprintf("\n## %s\n\n", cname))
+
+  df_c <- contrasts_df[contrasts_df$contrast == cname, ]
+  if (!is.null(de$selection) && "best_family" %in% names(de$selection))
+    df_c <- merge(df_c, de$selection[, c("feature", "best_family")],
+                  by = "feature", all.x = TRUE)
+
+  n_sig_c <- sum(!is.na(df_c$p_adj) & df_c$p_adj < 0.05)
+  cat(sprintf("**%d significant features** (FDR < 5%%) out of %d tested.\n\n",
+              n_sig_c, nrow(df_c)))
+
+  cat("### Volcano Plot\n\n")
+  print(tagList(as_girafe(make_volcano(df_c))))
+  cat("\n\n")
+
+  cat("### MA Plot\n\n")
+  print(tagList(as_girafe(make_ma(df_c))))
+  cat("\n\n")
+
+  cat("### Top hits\n\n")
+  top_tbl <- df_c %>%
+    filter(!is.na(p_adj)) %>%
+    arrange(p_adj) %>%
+    head(50) %>%
+    mutate(across(c(estimate, se), ~ round(., 4)),
+           z       = round(z, 3),
+           p_value = signif(p_value, 3),
+           p_adj   = signif(p_adj, 3)) %>%
+    select(any_of(c("feature", "estimate", "se", "z", "p_value", "p_adj")))
+  print(tagList(
+    datatable(top_tbl, rownames = FALSE,
+              caption = paste0("Top 50 features — ", cname),
+              options = list(pageLength = 10, dom = "tip", scrollX = TRUE))
+  ))
+  cat("\n\n")
+}
+```
+
+```{r omnibus-section, results='asis', eval=has_omnibus}
+cat("# 5 — Omnibus Test\n\n")
+cat("> **Global test of joint factor significance (Wald or LRT).**\n")
+cat("> Tests whether any coefficient of the target factor is jointly non-zero.\n")
+cat("> Features with `pass = TRUE` proceeded to pairwise contrast computation.\n\n")
+```
+
+```{r omnibus-table, eval=has_omnibus}
+de$omnibus %>%
+  mutate(statistic = round(statistic, 3), p_value = signif(p_value, 3)) %>%
+  datatable(rownames = FALSE, filter = "top",
+            caption = "Omnibus test results",
+            options  = list(pageLength = 15, scrollX = TRUE,
+                            dom = "lBfrtip", buttons = list("csv", "excel")),
+            extensions = "Buttons") %>%
+  formatStyle("pass",
+              backgroundColor = styleEqual(c(TRUE, FALSE),
+                                           c("#d4edda", "#f8d7da")))
+```
+
+---
+
+```{r footer}
+HTML(paste0(
+  '<div class="perseo-footer">',
+  'Generated by <strong>PERSEO</strong> v', pkg_version,
+  ' &nbsp;&bull;&nbsp; ', format(Sys.time(), "%Y-%m-%d %H:%M"),
+  ' &nbsp;&bull;&nbsp; <a href="https://github.com/OPSergio/Perseo"',
+  ' target="_blank">GitHub</a>',
+  '</div>'
+))
+```

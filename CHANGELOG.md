@@ -73,6 +73,8 @@ First major release of PERSEO.
 - **Integration tests**: End-to-end workflow validation with realistic synthetic omics data
 - **Package infrastructure**: DESCRIPTION and NAMESPACE files for R package compliance
 - **Documentation**: Comprehensive testing guide with examples and best practices
+- Added representations and interactive report.
+
 
 ### Changed
 

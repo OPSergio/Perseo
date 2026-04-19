@@ -1,0 +1,197 @@
+/* PERSEO Report Stylesheet */
+
+body {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  color: #333;
+  line-height: 1.6;
+}
+
+/* ---- Header ---- */
+.perseo-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px 0 16px 0;
+  border-bottom: 3px solid #2C3E50;
+  margin-bottom: 20px;
+}
+
+.perseo-logo {
+  height: 72px;
+  width: auto;
+  flex-shrink: 0;
+}
+
+.perseo-report-title {
+  margin: 0 0 4px 0 !important;
+  font-size: 1.7em !important;
+  font-weight: 700 !important;
+  color: #2C3E50 !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+.perseo-subtitle {
+  margin: 0;
+  font-size: 0.85em;
+  color: #666;
+  letter-spacing: 0.02em;
+}
+
+.perseo-intro {
+  color: #555;
+  font-size: 0.95em;
+  margin-bottom: 24px;
+  max-width: 860px;
+}
+
+/* ---- KPI boxes ---- */
+.kpi-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 20px 0;
+}
+
+.kpi-box {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 16px 24px;
+  min-width: 140px;
+  text-align: center;
+  flex: 1;
+}
+
+.kpi-box.kpi-sig {
+  background: #fff3f3;
+  border-color: #C0392B;
+}
+
+.kpi-value {
+  font-size: 2em;
+  font-weight: 700;
+  color: #2C3E50;
+  line-height: 1.1;
+}
+
+.kpi-sig .kpi-value {
+  color: #C0392B;
+}
+
+.kpi-label {
+  font-size: 0.8em;
+  color: #666;
+  margin-top: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ---- Section headings ---- */
+h1.title {
+  display: none; /* title is in our custom header */
+}
+
+h1 {
+  color: #2C3E50;
+  border-bottom: 2px solid #ecf0f1;
+  padding-bottom: 6px;
+}
+
+h2 {
+  color: #34495E;
+}
+
+/* ---- Footer ---- */
+.perseo-footer {
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid #dee2e6;
+  font-size: 0.8em;
+  color: #888;
+  text-align: center;
+}
+
+.perseo-footer a {
+  color: #2C3E50;
+  text-decoration: none;
+}
+
+/* ---- Parameter table ---- */
+.param-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88em;
+  margin: 16px 0 24px 0;
+}
+
+.param-table th {
+  background: #2C3E50;
+  color: white;
+  padding: 9px 12px;
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.param-table td {
+  padding: 7px 12px;
+  vertical-align: top;
+  border-bottom: 1px solid #ecf0f1;
+}
+
+.param-table tr:hover td {
+  background: #f8f9fa;
+}
+
+.param-section-header td {
+  background: #ecf0f1 !important;
+  font-weight: 700;
+  color: #2C3E50;
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 12px !important;
+}
+
+.param-name {
+  font-weight: 600;
+  color: #34495E;
+  white-space: nowrap;
+}
+
+.param-value code {
+  background: #f0f4f8;
+  border: 1px solid #dce3ea;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+
+.param-badge {
+  display: inline-block;
+  color: white;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 0.82em;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+/* ---- DataTables ---- */
+.dataTables_wrapper .dataTables_filter input {
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  padding: 4px 8px;
+}
+
+/* ---- ggiraph SVG ---- */
+.girafe_container_std {
+  margin: 12px auto;
+}
+
+/* ---- Tab panels ---- */
+.nav-tabs > li > a {
+  font-size: 0.9em;
+}

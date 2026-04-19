@@ -35,6 +35,10 @@
   - [Required Inputs](#required-inputs)
   - [Workflow A: Formula + Automatic Contrasts](#workflow-a-formula--automatic-contrasts)
   - [Workflow B: Design Matrix + Manual Contrasts](#workflow-b-design-matrix--manual-contrasts)
+- [Visualizations](#visualizations)
+  - [Volcano Plot](#volcano-plot)
+  - [MA Plot](#ma-plot)
+- [Interactive HTML Report](#interactive-html-report)
 - [Advanced Features](#advanced-features)
   - [Hierarchical Testing (Omnibus + Contrasts)](#hierarchical-testing-omnibus--contrasts)
   - [Transformation Modes](#transformation-modes)
@@ -388,6 +392,183 @@ fit_gamlss_models(
   design_matrix = design,       # matrix
   contrast_matrix = C,           # explicit
   candidate_families = c("NBI", "GG")
+)
+```
+
+---
+
+## Visualizations
+
+PERSEO provides two ggplot2-based visualization functions for exploring differential expression results. Both accept the output of `run_perseo()` or `fit_gamlss_models()` and return `ggplot` objects that can be further customized or saved.
+
+**Install optional label package for cleaner plots:**
+
+```r
+install.packages("ggrepel")  # non-overlapping text labels
+```
+
+### Volcano Plot
+
+`plot_volcano()` displays log fold change against -log10 adjusted p-value, with four significance categories colour-coded:
+
+| Category | Criterion |
+|----------|-----------|
+| **Not sig** | FDR ≥ threshold AND \|LFC\| < threshold |
+| **LFC only** | \|LFC\| ≥ threshold, FDR not significant |
+| **FDR only** | FDR significant, \|LFC\| < threshold |
+| **Sig & LFC** | Both FDR and \|LFC\| thresholds met |
+
+```r
+# Basic volcano plot for one contrast
+p <- plot_volcano(results, contrast = "Treatment_vs_Control")
+print(p)
+
+# Customise thresholds and labels
+p <- plot_volcano(
+  results,
+  contrast       = "TreatmentA_vs_Control",
+  fdr_threshold  = 0.05,    # FDR significance cutoff
+  lfc_threshold  = 1,       # |LFC| cutoff (log scale)
+  label_top      = 15,      # label top N significant features
+  point_size     = 2,
+  alpha          = 0.6,
+  title          = "My Volcano"
+)
+
+# Save to file
+ggplot2::ggsave("volcano_TreatA_vs_Control.png", p, width = 8, height = 5.5, dpi = 150)
+
+# Loop over all contrasts
+contrasts <- unique(results$differential_expression$contrasts$contrast)
+for (cname in contrasts) {
+  p <- plot_volcano(results, contrast = cname, label_top = 10)
+  ggplot2::ggsave(paste0("volcano_", cname, ".png"), p, width = 8, height = 5.5)
+}
+```
+
+### MA Plot
+
+`plot_ma()` displays mean expression (log2 scale) against log fold change. Points are coloured by significance. Providing the original `counts_matrix` places features on the true mean expression axis; without it, features are ranked by |LFC|.
+
+```r
+# MA plot — true mean expression on x-axis
+p <- plot_ma(
+  results,
+  contrast      = "Treatment_vs_Control",
+  counts_matrix = counts_matrix      # original counts for x-axis
+)
+print(p)
+
+# MA plot without counts (uses |LFC| rank on x-axis)
+p <- plot_ma(results, contrast = "Treatment_vs_Control")
+
+# Customise
+p <- plot_ma(
+  results,
+  contrast      = "TreatmentB_vs_TreatmentA",
+  counts_matrix = counts_matrix,
+  fdr_threshold = 0.01,
+  label_top     = 20
+)
+
+ggplot2::ggsave("ma_TreatB_vs_TreatA.png", p, width = 8, height = 5.5, dpi = 150)
+```
+
+**Parameters shared by both functions:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `contrast` | `NULL` | Contrast name to plot; auto-selected if only one exists |
+| `fdr_threshold` | `0.05` | Adjusted p-value threshold |
+| `label_top` | `10` | Top N significant features to label (0 = none) |
+| `point_size` | `1.8` | Base point size |
+| `alpha` | `0.7` | Point transparency |
+| `title` | `NULL` | Plot title; auto-generated if NULL |
+
+---
+
+## Interactive HTML Report
+
+`report_perseo()` generates a self-contained HTML report from the output of `run_perseo()`. The report includes:
+
+- **Header**: PERSEO logo, version, run timestamp
+- **Analysis Parameters**: Full table of all `run_perseo()` inputs (data, families, models, contrasts, multiple testing, parallelisation)
+- **KPI Summary**: Total features, significant hits (FDR < 5%), families tested, contrasts computed
+- **Family Selection**: Interactive bar chart (ggiraph) of family frequency distribution + summary table
+- **Differential Expression**: Searchable, sortable DT table of all coefficient results
+- **Contrasts**: Per-contrast tabset with interactive volcano plot, MA plot, and top-hits table
+- **Omnibus** *(if enabled)*: Table of omnibus test results
+
+**Install required packages:**
+
+```r
+install.packages(c("rmarkdown", "ggiraph", "DT", "htmltools"))
+install.packages("ggrepel")  # optional, for labelled plots
+```
+
+**Usage:**
+
+```r
+# Generate report in current directory
+report_perseo(results)
+
+# Custom output location and title
+report_perseo(
+  x           = results,
+  output_file = "my_analysis.html",
+  output_dir  = "reports/",
+  title       = "Tumour vs Normal — PERSEO Report",
+  open        = TRUE    # auto-open in browser
+)
+
+# Suppress browser opening (e.g. in scripts)
+path <- report_perseo(results, open = FALSE)
+cat("Report saved to:", path, "\n")
+```
+
+**Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `x` | — | Output of `run_perseo()` |
+| `output_file` | `"perseo_report.html"` | Output filename |
+| `output_dir` | `"."` | Output directory (created if absent) |
+| `title` | `"PERSEO Analysis Report"` | Report title in header |
+| `open` | `TRUE` | Open in browser after rendering |
+| `quiet` | `FALSE` | Suppress rmarkdown render messages |
+
+**Full example — 4-group analysis:**
+
+```r
+library(PERSEO)
+
+# 1. Build metadata and run pipeline
+metadata <- data.frame(
+  group = factor(rep(c("Control", "TreatA", "TreatB", "TreatC"), each = 20))
+)
+results <- run_perseo(
+  counts_matrix     = counts_matrix,
+  design_matrix     = "~ group",
+  metadata          = metadata,
+  contrast_variable = "group",   # auto-generates all 6 pairwise contrasts
+  n_genes           = 150,
+  n_boot            = 8,
+  top_n             = 4,
+  criterion         = "BIC",
+  p_adjust_method   = "BH",
+  seed              = 2024
+)
+
+# 2. Visualise individual contrasts
+plot_volcano(results, "TreatA_vs_Control", label_top = 15)
+plot_ma(results, "TreatA_vs_Control", counts_matrix = counts_matrix)
+
+# 3. Generate full interactive report
+report_perseo(
+  results,
+  output_file = "perseo_4group_report.html",
+  output_dir  = "reports/",
+  title       = "4-Group PERSEO Analysis"
 )
 ```
 

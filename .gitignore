@@ -34,3 +34,4 @@ __pycache__/
 # ---- R / RStudio tmp helpers ----
 test_run.R
 docs/contrast_vcov_fix.md
+dev/

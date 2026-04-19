@@ -22,14 +22,27 @@ run_perseo(
   p_adjust_method = "BH",
   transform_mode = NULL,
   show_progress = TRUE,
-  seed = NULL
+  seed = NULL,
+  metadata = NULL,
+  contrast_variable = NULL,
+  omnibus = FALSE,
+  omnibus_threshold = 0.05,
+  omnibus_test = c("Wald", "LRT"),
+  parallel = FALSE,
+  workers = NULL,
+  thr_zero = 0.005,
+  thr_one = 0.005
 )
 }
 \arguments{
 \item{counts_matrix}{Numeric matrix (features × samples) with rownames as feature IDs.}
 
-\item{design_matrix}{Data frame or matrix with covariates (samples × predictors).
-Will be cleaned automatically (intercept column removed, dimension validated).}
+\item{design_matrix}{Covariates specification. Accepts three forms:
+(1) a numeric matrix (samples × predictors) from \code{model.matrix()};
+(2) a formula string such as \code{"~ group + batch"} — requires
+\code{metadata}; or (3) an R \code{formula} object. When a formula string
+or formula is supplied, \code{metadata} must be provided and
+\code{contrast_variable} can be used for automatic contrast generation.}
 
 \item{contrast_matrix}{Optional numeric matrix where each row defines a linear
 combination of mu coefficients. Column names must match coefficient names from
@@ -77,6 +90,32 @@ both family selection and differential expression.}
 \item{show_progress}{Logical, show progress messages and reports (default: TRUE).}
 
 \item{seed}{Integer or NULL, random seed for reproducibility (default: NULL).}
+
+\item{metadata}{Data frame of sample metadata; required when design_matrix is a
+formula string or when contrast_variable is used (default: NULL).}
+
+\item{contrast_variable}{Character string naming a factor column in metadata for
+which all pairwise contrasts are auto-generated (default: NULL). Requires metadata.}
+
+\item{omnibus}{Logical, whether to run an omnibus test before computing contrasts
+(default: FALSE). Requires contrasts (contrast_matrix or contrast_variable).}
+
+\item{omnibus_threshold}{Numeric, p-value threshold for omnibus test pass/fail
+(default: 0.05). Only features that pass proceed to contrast computation.}
+
+\item{omnibus_test}{Character, omnibus test type: "Wald" or "LRT" (default: "Wald").}
+
+\item{parallel}{Logical, whether to parallelize feature-level fitting (default: FALSE).
+Requires the `future` and `future.apply` packages.}
+
+\item{workers}{Integer, number of parallel workers (default: NULL = all available cores).
+Only used when parallel = TRUE.}
+
+\item{thr_zero}{Numeric, zero-inflation evidence threshold for family filtering in
+family selection step (default: 0.005).}
+
+\item{thr_one}{Numeric, one-inflation evidence threshold for family filtering in
+family selection step (default: 0.005).}
 }
 \value{
 List with three components:
@@ -166,10 +205,37 @@ results_contrasts <- run_perseo(
 # View contrast results
 sig_contrasts <- results_contrasts$differential_expression$contrasts \%>\%
   filter(p_adj < 0.05)
+
+# Formula + automatic contrasts (simpler interface)
+metadata <- data.frame(
+  group = factor(rep(c("Control", "TreatA", "TreatB"), each = 20))
+)
+results2 <- run_perseo(
+  counts_matrix     = counts,
+  design_matrix     = "~ group",
+  metadata          = metadata,
+  contrast_variable = "group",   # auto-generates all pairwise contrasts
+  n_genes           = 150,
+  n_boot            = 8,
+  top_n             = 4,
+  criterion         = "BIC",
+  p_adjust_method   = "BH",
+  seed              = 42
+)
+
+# Visualise results
+plot_volcano(results2, contrast = "TreatA_vs_Control", label_top = 15)
+plot_ma(results2, contrast = "TreatA_vs_Control", counts_matrix = counts)
+
+# Generate interactive HTML report
+report_perseo(results2, output_file = "analysis.html", open = TRUE)
 }
 
 }
 \seealso{
 \code{\link{find_families}} for family selection details.
 \code{\link{fit_gamlss_models}} for differential expression fitting.
+\code{\link{plot_volcano}} for volcano plots.
+\code{\link{plot_ma}} for MA plots.
+\code{\link{report_perseo}} for interactive HTML reports.
 }

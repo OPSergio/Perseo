@@ -4,10 +4,7 @@ output:
   html_document:
     theme: flatly
     highlight: tango
-    toc: true
-    toc_float:
-      collapsed: false
-      smooth_scroll: true
+    toc: false
     self_contained: true
 params:
   result: NULL
@@ -37,172 +34,193 @@ pkg_version <- tryCatch(as.character(utils::packageVersion("PERSEO")),
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
-# ---- Shared plot helpers ---------------------------------------------------
+# ---- Extract and normalise data --------------------------------------------
 
-.perseo_colours <- c("Not sig" = "#AAAAAA", "LFC only" = "#4E9FD4",
-                     "FDR only" = "#F4A460", "Sig & LFC" = "#C0392B")
+results_df   <- de$results   %||% data.frame()
+contrasts_df <- de$contrasts %||% data.frame()
 
-theme_rmd <- function(base_size = 11) {
-  ggplot2::theme_minimal(base_size = base_size) +
-    ggplot2::theme(
-      panel.grid.minor = ggplot2::element_blank(),
-      panel.border     = ggplot2::element_rect(colour = "#CCCCCC", fill = NA,
-                                               linewidth = 0.4),
-      strip.background = ggplot2::element_rect(fill = "#F5F5F5", colour = "#CCCCCC"),
-      legend.position  = "right",
-      plot.title       = ggplot2::element_text(face = "bold"),
-      axis.title       = ggplot2::element_text(face = "bold"),
-      plot.caption     = ggplot2::element_text(colour = "#888888", size = 8)
+# Normalise column names
+if ("padj" %in% names(results_df) && !"p_adj" %in% names(results_df))
+  results_df$p_adj <- results_df$padj
+if ("pval" %in% names(results_df) && !"p_value" %in% names(results_df))
+  results_df$p_value <- results_df$pval
+
+# ---- Unified significance thresholds (single source of truth) -------------
+# These values drive KPI cards, volcano colours, contrast counters, and Venn sets.
+
+.fdr_threshold <- 0.05
+.lfc_threshold <- 1.0
+
+n_features  <- nrow(de$selection %||% data.frame())
+n_families  <- length(fs$top_families_overall)
+
+if (has_contrasts) {
+  sig_features <- unique(contrasts_df$feature[
+    !is.na(contrasts_df$p_adj) &
+    contrasts_df$p_adj < .fdr_threshold &
+    abs(contrasts_df$estimate) >= .lfc_threshold
+  ])
+  sig_source_label <- paste0(
+    "FDR&nbsp;&lt;&nbsp;", .fdr_threshold,
+    " &amp; |LFC|&nbsp;&ge;&nbsp;", .lfc_threshold,
+    " in &ge;1 contrast")
+} else if (nrow(results_df) > 0 && "p_adj" %in% names(results_df)) {
+  r_ni <- results_df[!is.na(results_df$term) & results_df$term != "(Intercept)" &
+                       !is.na(results_df$p_adj) & results_df$p_adj < .fdr_threshold, ]
+  sig_features     <- unique(r_ni$feature)
+  sig_source_label <- paste0("FDR&nbsp;&lt;&nbsp;", .fdr_threshold,
+                              " (coefficients, intercept excluded)")
+} else {
+  sig_features     <- character(0)
+  sig_source_label <- "N/A"
+}
+
+n_sig       <- length(sig_features)
+n_contrasts <- if (has_contrasts) length(unique(contrasts_df$contrast)) else 0L
+
+# ---- Contrast metadata -----------------------------------------------------
+
+contrast_names <- if (has_contrasts) unique(contrasts_df$contrast) else character(0)
+contrast_slugs <- gsub("[^A-Za-z0-9]", "-", contrast_names)
+
+show_comparison <- has_contrasts && length(contrast_names) >= 2
+omnibus_sec_num <- if (show_comparison) 6L else 5L
+
+has_jsonlite <- requireNamespace("jsonlite", quietly = TRUE)
+
+# ---- Master results table --------------------------------------------------
+
+master_rows <- list()
+
+if (nrow(results_df) > 0) {
+  rsub <- results_df[!is.na(results_df$term) & results_df$term != "(Intercept)", ,
+                     drop = FALSE]
+  if (nrow(rsub) > 0) {
+    eff_col  <- intersect(c("effect", "estimate"), names(rsub))[1]
+    stat_col <- intersect(c("stat", "z"),          names(rsub))[1]
+    pv_col   <- intersect(c("p_value", "pval"),    names(rsub))[1]
+    pa_col   <- intersect(c("p_adj",   "padj"),    names(rsub))[1]
+
+    master_rows[["coef"]] <- data.frame(
+      Feature       = rsub$feature,
+      Type          = "Coefficient",
+      Contrast_Term = rsub$term,
+      Estimate      = if (!is.na(eff_col))  rsub[[eff_col]]  else NA_real_,
+      SE            = if ("se" %in% names(rsub)) rsub$se      else NA_real_,
+      Stat          = if (!is.na(stat_col)) rsub[[stat_col]] else NA_real_,
+      P_value       = if (!is.na(pv_col))  rsub[[pv_col]]   else NA_real_,
+      P_adj         = if (!is.na(pa_col))  rsub[[pa_col]]   else NA_real_,
+      Family        = if (!is.null(de$selection))
+                        de$selection$best_family[match(rsub$feature,
+                                                       de$selection$feature)]
+                      else NA_character_,
+      stringsAsFactors = FALSE
     )
+  }
 }
 
-make_volcano <- function(df_c, fdr = 0.05, lfc = 1) {
-  df_c$neg_log10 <- -log10(pmax(df_c$p_adj, 1e-300))
-  df_c$sig_cat   <- dplyr::case_when(
-    !is.finite(df_c$estimate) | !is.finite(df_c$p_adj)    ~ "Not sig",
-    df_c$p_adj < fdr & abs(df_c$estimate) >= lfc           ~ "Sig & LFC",
-    df_c$p_adj < fdr                                       ~ "FDR only",
-    abs(df_c$estimate) >= lfc                              ~ "LFC only",
-    TRUE                                                   ~ "Not sig"
+if (has_contrasts && nrow(contrasts_df) > 0) {
+  master_rows[["cont"]] <- data.frame(
+    Feature       = contrasts_df$feature,
+    Type          = "Contrast",
+    Contrast_Term = contrasts_df$contrast,
+    Estimate      = contrasts_df$estimate,
+    SE            = if ("se"      %in% names(contrasts_df)) contrasts_df$se      else NA_real_,
+    Stat          = if ("z"       %in% names(contrasts_df)) contrasts_df$z       else NA_real_,
+    P_value       = if ("p_value" %in% names(contrasts_df)) contrasts_df$p_value else NA_real_,
+    P_adj         = if ("p_adj"   %in% names(contrasts_df)) contrasts_df$p_adj   else NA_real_,
+    Family        = if (!is.null(de$selection))
+                      de$selection$best_family[match(contrasts_df$feature,
+                                                     de$selection$feature)]
+                    else NA_character_,
+    stringsAsFactors = FALSE
   )
-  df_c$sig_cat <- factor(df_c$sig_cat,
-                         levels = c("Not sig", "LFC only", "FDR only", "Sig & LFC"))
-  df_c$tooltip <- paste0("<b>", df_c$feature, "</b><br/>LFC: ",
-                         round(df_c$estimate, 3), "<br/>p-adj: ",
-                         signif(df_c$p_adj, 3))
-  df_c$data_id <- df_c$feature
-  ggplot2::ggplot(df_c, ggplot2::aes(x = estimate, y = neg_log10,
-                                     colour = sig_cat,
-                                     tooltip = tooltip, data_id = data_id)) +
-    ggiraph::geom_point_interactive(size = 1.6, alpha = 0.7, na.rm = TRUE) +
-    ggplot2::geom_vline(xintercept = c(-lfc, lfc), linetype = "dashed",
-                        colour = "#555555", linewidth = 0.4) +
-    ggplot2::geom_hline(yintercept = -log10(fdr), linetype = "dashed",
-                        colour = "#555555", linewidth = 0.4) +
-    ggplot2::scale_colour_manual(values = .perseo_colours, name = NULL, drop = FALSE) +
-    ggplot2::labs(x = "Log Fold Change", y = expression(-log[10](p[adj])),
-                  caption = paste0("FDR < ", fdr, "  |  |LFC| \u2265 ", lfc)) +
-    theme_rmd()
 }
 
-make_ma <- function(df_c, fdr = 0.05) {
-  df_c$sig     <- !is.na(df_c$p_adj) & df_c$p_adj < fdr
-  df_c$a_axis  <- if ("mean_expr" %in% names(df_c)) df_c$mean_expr else
-                    rank(-abs(df_c$estimate), ties.method = "first")
-  df_c$tooltip <- paste0("<b>", df_c$feature, "</b><br/>LFC: ",
-                         round(df_c$estimate, 3), "<br/>p-adj: ",
-                         signif(df_c$p_adj, 3))
-  df_c$data_id <- df_c$feature
-  ggplot2::ggplot(df_c, ggplot2::aes(x = a_axis, y = estimate, colour = sig,
-                                     tooltip = tooltip, data_id = data_id)) +
-    ggiraph::geom_point_interactive(size = 1.6, alpha = 0.7, na.rm = TRUE) +
-    ggplot2::geom_hline(yintercept = 0, colour = "#333333", linewidth = 0.5) +
-    ggplot2::scale_colour_manual(
-      values = c("TRUE" = "#C0392B", "FALSE" = "#AAAAAA"),
-      labels = c("TRUE" = paste0("FDR < ", fdr), "FALSE" = "Not sig"),
-      name   = NULL) +
-    ggplot2::labs(x = expression(log[2](Mean~expression + 1)),
-                  y = "Log Fold Change",
-                  caption = paste0("FDR < ", fdr)) +
-    theme_rmd()
+master_tbl <- do.call(rbind, master_rows)
+if (!is.null(master_tbl) && nrow(master_tbl) > 0) {
+  master_tbl$Estimate <- signif(master_tbl$Estimate, 4)
+  master_tbl$SE       <- signif(master_tbl$SE,       4)
+  master_tbl$Stat     <- round(master_tbl$Stat,      3)
+  master_tbl$P_value  <- signif(master_tbl$P_value,  3)
+  master_tbl$P_adj    <- signif(master_tbl$P_adj,    3)
 }
 
-as_girafe <- function(gg, w = 7, h = 4.5) {
-  ggiraph::girafe(ggobj = gg, width_svg = w, height_svg = h,
-    options = list(
-      ggiraph::opts_hover(css = "opacity:1;"),
-      ggiraph::opts_tooltip(
-        css = "background:white;border:1px solid #ccc;padding:6px 8px;
-               border-radius:4px;font-size:12px;font-family:sans-serif;"),
-      ggiraph::opts_sizing(rescale = TRUE)))
+# ---- Family information lookup ---------------------------------------------
+
+.family_info <- list(
+  NBI    = list(full = "Negative Binomial Type I",    type = "Count",
+                desc = "Overdispersed counts (variance > mean). Typical for RNA-seq."),
+  PO     = list(full = "Poisson",                     type = "Count",
+                desc = "Equidispersed counts (variance = mean)."),
+  ZIP    = list(full = "Zero-Inflated Poisson",        type = "Count",
+                desc = "Excess zeros + equidispersed non-zero counts."),
+  ZINBI  = list(full = "Zero-Inflated Neg. Binomial", type = "Count",
+                desc = "Excess zeros + overdispersed non-zero counts."),
+  ZIP2   = list(full = "Zero-Inflated Poisson 2",     type = "Count",
+                desc = "Alternative parametrisation of zero-inflated Poisson."),
+  BI     = list(full = "Binomial",                    type = "Count",
+                desc = "Binary outcomes or proportions with known denominator."),
+  BB     = list(full = "Beta-Binomial",               type = "Count",
+                desc = "Overdispersed proportions with known denominator."),
+  GA     = list(full = "Gamma",                       type = "Positive continuous",
+                desc = "Positive continuous, right-skewed (e.g. TPM, RPKM)."),
+  GG     = list(full = "Generalized Gamma",           type = "Positive continuous",
+                desc = "Positive continuous, flexible shape; generalises Gamma, Log-Normal, Inverse Gaussian."),
+  LOGNO  = list(full = "Log-Normal",                  type = "Positive continuous",
+                desc = "Positive continuous; log(y) follows a Normal distribution. Common for mass-spec intensities."),
+  IG     = list(full = "Inverse Gaussian",            type = "Positive continuous",
+                desc = "Positive continuous, strongly right-skewed."),
+  BE     = list(full = "Beta",                        type = "Unit interval",
+                desc = "Proportions in (0,1) without point mass at 0 or 1. DNA methylation beta-values."),
+  BEINF  = list(full = "Beta Inflated (0 and 1)",     type = "Unit interval",
+                desc = "Proportions in [0,1] with point mass at both 0 and 1."),
+  BEO    = list(full = "Beta Inflated at 1",          type = "Unit interval",
+                desc = "Proportions in [0,1] with point mass at 1."),
+  BEZI   = list(full = "Beta Zero-Inflated",          type = "Unit interval",
+                desc = "Proportions in [0,1] with point mass at 0."),
+  BEo    = list(full = "Beta Inflated at 0",          type = "Unit interval",
+                desc = "Proportions in [0,1] with point mass at 0 (alternative parametrisation)."),
+  BEINF0 = list(full = "Beta Inflated at 0 (0-1)",    type = "Unit interval",
+                desc = "Proportions in [0,1] with point mass at 0."),
+  NO     = list(full = "Normal (Gaussian)",            type = "Real-valued",
+                desc = "Symmetric real-valued data. Appropriate for log- or VST-transformed data."),
+  TF     = list(full = "t Family",                    type = "Real-valued",
+                desc = "Real-valued, heavy tails. Robust to outliers."),
+  GU     = list(full = "Gumbel",                      type = "Real-valued",
+                desc = "Real-valued extreme-value distribution.")
+)
+
+family_badge <- function(fam) {
+  info <- .family_info[[fam]]
+  if (is.null(info)) return(htmlEscape(fam))
+  sprintf('<span class="family-badge" title="%s (%s) \u2014 %s">%s</span>',
+          htmlEscape(info$full), htmlEscape(info$type),
+          htmlEscape(info$desc), htmlEscape(fam))
 }
-```
 
-```{r inline-css, results='asis'}
-# Inline CSS so it works regardless of working directory during render
-css <- "
-body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size:14px;
-       color:#333; line-height:1.6; }
-h1.title { display:none; }
-.perseo-header { display:flex; align-items:center; gap:20px;
-                 padding:20px 0 16px 0; border-bottom:3px solid #2C3E50;
-                 margin-bottom:20px; }
-.perseo-logo   { height:72px; width:auto; flex-shrink:0; }
-.perseo-report-title { margin:0 0 4px 0 !important; font-size:1.7em !important;
-                       font-weight:700 !important; color:#2C3E50 !important;
-                       border:none !important; padding:0 !important; }
-.perseo-subtitle { margin:0; font-size:0.85em; color:#666; letter-spacing:0.02em; }
-.perseo-intro { color:#555; font-size:0.95em; margin-bottom:24px; max-width:860px; }
-.kpi-row { display:flex; flex-wrap:wrap; gap:16px; margin:20px 0; }
-.kpi-box { background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px;
-           padding:16px 24px; min-width:140px; text-align:center; flex:1; }
-.kpi-box.kpi-sig { background:#fff3f3; border-color:#C0392B; }
-.kpi-value { font-size:2em; font-weight:700; color:#2C3E50; line-height:1.1; }
-.kpi-sig .kpi-value { color:#C0392B; }
-.kpi-label { font-size:0.8em; color:#666; margin-top:6px;
-             text-transform:uppercase; letter-spacing:0.05em; }
-.param-table { width:100%; border-collapse:collapse; font-size:0.88em;
-               margin:16px 0 24px 0; }
-.param-table th { background:#2C3E50; color:white; padding:9px 12px;
-                  text-align:left; font-weight:600; letter-spacing:0.03em; }
-.param-table td { padding:7px 12px; vertical-align:top;
-                  border-bottom:1px solid #ecf0f1; }
-.param-table tr:hover td { background:#f8f9fa; }
-.param-section-header td { background:#ecf0f1 !important; font-weight:700;
-                           color:#2C3E50; font-size:0.9em;
-                           text-transform:uppercase; letter-spacing:0.06em;
-                           padding:6px 12px !important; }
-.param-name { font-weight:600; color:#34495E; white-space:nowrap; }
-.param-value code { background:#f0f4f8; border:1px solid #dce3ea; border-radius:3px;
-                    padding:1px 5px; font-size:0.9em; }
-.param-badge { display:inline-block; color:white; border-radius:4px; padding:2px 8px;
-               font-size:0.82em; font-weight:600; letter-spacing:0.03em; }
-.perseo-footer { margin-top:48px; padding-top:16px; border-top:1px solid #dee2e6;
-                 font-size:0.8em; color:#888; text-align:center; }
-.perseo-footer a { color:#2C3E50; text-decoration:none; }
-h1 { color:#2C3E50; border-bottom:2px solid #ecf0f1; padding-bottom:6px; }
-h2 { color:#34495E; }
-"
-cat("<style>", css, "</style>\n")
-```
+# ---- UI helpers ------------------------------------------------------------
 
-<!-- ===================== HEADER ===================== -->
+info_box <- function(title, body) {
+  paste0(
+    '<details class="perseo-info-box">',
+    '<summary class="perseo-info-summary">',
+    '<span class="info-icon">&#9432;</span> ', title,
+    '</summary>',
+    '<div class="perseo-info-body">', body, '</div>',
+    '</details>'
+  )
+}
 
-```{r header}
-HTML(paste0('
-<div class="perseo-header">
-  <img src="https://raw.githubusercontent.com/OPSergio/Perseo/main/assets/logo_perseo.png"
-       class="perseo-logo" alt="PERSEO">
-  <div class="perseo-header-text">
-    <h1 class="perseo-report-title">', htmlEscape(params$report_title), '</h1>
-    <p class="perseo-subtitle">
-      PERSEO&nbsp;v', pkg_version, '&nbsp;&nbsp;&bull;&nbsp;&nbsp;
-      GAMLSS-based Differential Expression&nbsp;&nbsp;&bull;&nbsp;&nbsp;',
-      format(Sys.time(), "%B %d, %Y"), '
-    </p>
-  </div>
-</div>
-<p class="perseo-intro">
-  This report summarises the results of a <strong>PERSEO</strong> differential
-  expression analysis. The pipeline (1)&nbsp;selects the best-fitting GAMLSS
-  distributional family per genomic feature via bootstrap sampling with
-  Jacobian-corrected IC comparison, (2)&nbsp;fits feature-level models with the
-  selected families, and (3)&nbsp;adjusts p-values for multiple testing. Use the
-  table of contents on the left to navigate between sections.
-</p>
-'))
-```
-
----
-
-# 0 — Analysis Parameters
-
-> **Full record of all parameters used in this analysis**, intended for
-> reproducibility and methods reporting. Each parameter is shown alongside a
-> brief explanation of its role in the pipeline.
-
-```{r params-table}
-s <- smry
+kpi <- function(value, label, note = NULL, sig = FALSE) {
+  cls      <- if (sig) "kpi-box kpi-sig" else "kpi-box"
+  note_html <- if (!is.null(note))
+    paste0('<div class="kpi-note">', note, '</div>') else ""
+  paste0('<div class="', cls, '">',
+         '<div class="kpi-value">', value, '</div>',
+         '<div class="kpi-label">', label, '</div>',
+         note_html, '</div>')
+}
 
 badge <- function(val, tl = "Yes", fl = "No",
                   tc = "#27AE60", fc = "#888888") {
@@ -223,16 +241,351 @@ prow <- function(name, value, desc) {
 ph <- function(label)
   paste0('<tr class="param-section-header"><td colspan="3">', label, '</td></tr>')
 
+# ---- Custom sidebar HTML --------------------------------------------------
+
+nav_links <- c(
+  '<a href="#s0">0 &mdash; Parameters</a>',
+  '<a href="#s1">1 &mdash; Summary</a>',
+  '<a href="#s2">2 &mdash; Family Selection</a>',
+  '<a href="#s3">3 &mdash; All Results</a>',
+  '<a href="#s4">4 &mdash; Contrasts</a>'
+)
+for (i in seq_along(contrast_names)) {
+  nav_links <- c(nav_links,
+    sprintf('<a href="#c-%s" class="nav-sub" title="%s">%s</a>',
+            contrast_slugs[i],
+            htmlEscape(contrast_names[i]),
+            if (nchar(contrast_names[i]) > 28)
+              paste0(substr(contrast_names[i], 1, 26), "&hellip;")
+            else htmlEscape(contrast_names[i])))
+}
+if (show_comparison)
+  nav_links <- c(nav_links, '<a href="#s5">5 &mdash; Comparison</a>')
+if (has_omnibus)
+  nav_links <- c(nav_links,
+    sprintf('<a href="#s%d">%d &mdash; Omnibus Test</a>',
+            omnibus_sec_num, omnibus_sec_num))
+
+sidebar_html <- paste0(
+  '<nav class="perseo-sidenav" id="perseo-nav">',
+  '<div class="sidenav-brand">PERSEO</div>',
+  paste(nav_links, collapse = "\n"),
+  '</nav>'
+)
+
+# ---- Plot helpers ----------------------------------------------------------
+
+.perseo_colours <- c(
+  "Not sig"  = "#AAAAAA",
+  "LFC only" = "#4E9FD4",
+  "FDR only" = "#F4A460",
+  "Sig & LFC" = "#C0392B"
+)
+
+theme_rmd <- function(base_size = 11) {
+  ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.border     = ggplot2::element_rect(colour = "#CCCCCC", fill = NA,
+                                               linewidth = 0.4),
+      strip.background = ggplot2::element_rect(fill = "#F5F5F5", colour = "#CCCCCC"),
+      legend.position  = "right",
+      plot.title       = ggplot2::element_text(face = "bold"),
+      axis.title       = ggplot2::element_text(face = "bold"),
+      plot.caption     = ggplot2::element_text(colour = "#888888", size = 8)
+    )
+}
+
+make_volcano <- function(df_c, fdr = .fdr_threshold, lfc = .lfc_threshold) {
+  df_c$neg_log10 <- -log10(pmax(df_c$p_adj, 1e-300))
+  df_c$sig_cat   <- dplyr::case_when(
+    !is.finite(df_c$estimate) | !is.finite(df_c$p_adj) ~ "Not sig",
+    df_c$p_adj < fdr & abs(df_c$estimate) >= lfc        ~ "Sig & LFC",
+    df_c$p_adj < fdr                                    ~ "FDR only",
+    abs(df_c$estimate) >= lfc                           ~ "LFC only",
+    TRUE                                                ~ "Not sig"
+  )
+  df_c$sig_cat <- factor(df_c$sig_cat,
+    levels = c("Not sig", "LFC only", "FDR only", "Sig & LFC"))
+  df_c$tooltip <- paste0(
+    "<b>", df_c$feature, "</b><br/>",
+    "LFC: ", round(df_c$estimate, 3), "<br/>",
+    "p-adj: ", signif(df_c$p_adj, 3))
+  df_c$data_id <- df_c$feature
+  ggplot2::ggplot(df_c,
+    ggplot2::aes(x = estimate, y = neg_log10,
+                 colour = sig_cat, tooltip = tooltip, data_id = data_id)) +
+    ggiraph::geom_point_interactive(size = 1.6, alpha = 0.7, na.rm = TRUE) +
+    ggplot2::geom_vline(xintercept = c(-lfc, lfc),
+      linetype = "dashed", colour = "#555555", linewidth = 0.4) +
+    ggplot2::geom_hline(yintercept = -log10(fdr),
+      linetype = "dashed", colour = "#555555", linewidth = 0.4) +
+    ggplot2::scale_colour_manual(values = .perseo_colours, name = NULL,
+                                 drop = FALSE) +
+    ggplot2::labs(
+      x = "Log Fold Change (link scale)",
+      y = expression(-log[10](p[adj])),
+      caption = paste0("Initial thresholds: FDR = ", fdr, " | |LFC| = ", lfc,
+                       " \u2014 use sliders below to update point colours")) +
+    theme_rmd()
+}
+
+make_ma <- function(df_c, fdr = .fdr_threshold) {
+  df_c$sig    <- !is.na(df_c$p_adj) & df_c$p_adj < fdr
+  df_c$a_axis <- if ("mean_expr" %in% names(df_c)) df_c$mean_expr else
+                   rank(-abs(df_c$estimate), ties.method = "first")
+  df_c$tooltip <- paste0(
+    "<b>", df_c$feature, "</b><br/>",
+    "LFC: ", round(df_c$estimate, 3), "<br/>",
+    "p-adj: ", signif(df_c$p_adj, 3))
+  df_c$data_id <- df_c$feature
+  ggplot2::ggplot(df_c,
+    ggplot2::aes(x = a_axis, y = estimate, colour = sig,
+                 tooltip = tooltip, data_id = data_id)) +
+    ggiraph::geom_point_interactive(size = 1.6, alpha = 0.7, na.rm = TRUE) +
+    ggplot2::geom_hline(yintercept = 0, colour = "#333333", linewidth = 0.5) +
+    ggplot2::scale_colour_manual(
+      values = c("TRUE" = "#C0392B", "FALSE" = "#AAAAAA"),
+      labels = c("TRUE" = paste0("FDR\u00a0<\u00a0", fdr), "FALSE" = "Not sig"),
+      name   = NULL) +
+    ggplot2::labs(
+      x = "Feature rank by |LFC| (or mean expression)",
+      y = "Log Fold Change (link scale)",
+      caption = paste0("MA-plot: A-axis = expression level / rank; M-axis = LFC")) +
+    theme_rmd()
+}
+
+as_girafe <- function(gg, w = 7, h = 4.5) {
+  ggiraph::girafe(ggobj = gg, width_svg = w, height_svg = h,
+    options = list(
+      ggiraph::opts_hover(css = "opacity:1;"),
+      ggiraph::opts_tooltip(
+        css = paste0("background:white;border:1px solid #ccc;padding:6px 8px;",
+                     "border-radius:4px;font-size:12px;font-family:sans-serif;")),
+      ggiraph::opts_sizing(rescale = TRUE)))
+}
+```
+
+```{r inline-css, results='asis'}
+css <- "
+/* ---- Layout ---- */
+body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size:14px;
+       color:#333; line-height:1.6; }
+h1.title { display:none; }
+.main-container { margin-left:240px !important; max-width:calc(100% - 260px) !important;
+                  padding-top:12px; }
+@media (max-width:991px) {
+  .perseo-sidenav { display:none !important; }
+  .main-container { margin-left:auto !important; max-width:100% !important; }
+}
+
+/* ---- Sidebar ---- */
+.perseo-sidenav {
+  position:fixed; top:0; left:0; width:225px; height:100vh;
+  overflow-y:auto; background:#f8f9fa; border-right:1px solid #dee2e6;
+  padding:0 0 24px 0; z-index:200; font-size:0.82em;
+}
+.sidenav-brand {
+  display:block; background:#2C3E50; color:white; font-size:1.05em;
+  font-weight:700; padding:14px 16px; letter-spacing:0.08em;
+  text-transform:uppercase; margin-bottom:8px;
+}
+.perseo-sidenav a {
+  display:block; padding:5px 14px; color:#555; text-decoration:none;
+  border-left:3px solid transparent; transition:all .15s;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.perseo-sidenav a:hover { color:#2C3E50; background:#eef2f7; }
+.perseo-sidenav a.active {
+  color:#2C3E50; border-left-color:#2C3E50;
+  font-weight:600; background:#e8edf3;
+}
+.perseo-sidenav a.nav-sub {
+  padding-left:28px; font-size:0.92em; color:#777; border-left-color:transparent;
+}
+.perseo-sidenav a.nav-sub.active { color:#2C3E50; border-left-color:#2C3E50; }
+
+/* ---- Header ---- */
+.perseo-header {
+  display:flex; align-items:center; gap:20px;
+  padding:20px 0 16px 0; border-bottom:3px solid #2C3E50; margin-bottom:20px;
+}
+.perseo-logo   { height:72px; width:auto; flex-shrink:0; }
+.perseo-report-title {
+  margin:0 0 4px 0 !important; font-size:1.7em !important;
+  font-weight:700 !important; color:#2C3E50 !important;
+  border:none !important; padding:0 !important;
+}
+.perseo-subtitle { margin:0; font-size:0.85em; color:#666; letter-spacing:0.02em; }
+.perseo-intro   { color:#555; font-size:0.93em; margin-bottom:4px; max-width:900px;
+                  line-height:1.7; }
+
+/* ---- KPI boxes ---- */
+.kpi-row  { display:flex; flex-wrap:wrap; gap:16px; margin:20px 0; }
+.kpi-box  { background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px;
+            padding:16px 24px; min-width:140px; text-align:center; flex:1; }
+.kpi-box.kpi-sig { background:#fff3f3; border-color:#C0392B; }
+.kpi-value { font-size:2em; font-weight:700; color:#2C3E50; line-height:1.1; }
+.kpi-sig .kpi-value { color:#C0392B; }
+.kpi-label { font-size:0.8em; color:#666; margin-top:6px;
+             text-transform:uppercase; letter-spacing:0.05em; }
+.kpi-note  { font-size:0.72em; color:#999; margin-top:5px;
+             font-style:italic; text-transform:none; letter-spacing:0; }
+
+/* ---- Info / methodology boxes ---- */
+.perseo-info-box {
+  border:1px solid #b8d4e8; border-radius:6px; background:#f0f7ff;
+  margin:10px 0 18px 0;
+}
+.perseo-info-summary {
+  padding:8px 14px; font-weight:600; cursor:pointer;
+  font-size:0.9em; color:#2C3E50; list-style:none; user-select:none;
+}
+.perseo-info-summary::-webkit-details-marker { display:none; }
+.info-icon { color:#3498db; margin-right:4px; }
+.perseo-info-body {
+  padding:10px 16px; font-size:0.87em; color:#444;
+  line-height:1.7; border-top:1px solid #b8d4e8;
+}
+.perseo-info-body p { margin:0 0 8px 0; }
+.perseo-info-body ul { margin:4px 0 8px 16px; padding:0; }
+.perseo-info-body li { margin-bottom:3px; }
+
+/* ---- Family badge ---- */
+.family-badge {
+  cursor:help; border-bottom:1px dotted #888; white-space:nowrap;
+  font-family:monospace; font-size:0.95em;
+}
+
+/* ---- Parameter table ---- */
+.param-table { width:100%; border-collapse:collapse; font-size:0.88em;
+               margin:16px 0 24px 0; }
+.param-table th { background:#2C3E50; color:white; padding:9px 12px;
+                  text-align:left; font-weight:600; letter-spacing:0.03em; }
+.param-table td { padding:7px 12px; vertical-align:top;
+                  border-bottom:1px solid #ecf0f1; }
+.param-table tr:hover td { background:#f8f9fa; }
+.param-section-header td { background:#ecf0f1 !important; font-weight:700;
+  color:#2C3E50; font-size:0.9em; text-transform:uppercase;
+  letter-spacing:0.06em; padding:6px 12px !important; }
+.param-name  { font-weight:600; color:#34495E; white-space:nowrap; }
+.param-value code { background:#f0f4f8; border:1px solid #dce3ea;
+  border-radius:3px; padding:1px 5px; font-size:0.9em; }
+.param-badge { display:inline-block; color:white; border-radius:4px;
+  padding:2px 8px; font-size:0.82em; font-weight:600; letter-spacing:0.03em; }
+
+/* ---- Volcano controls ---- */
+.volcano-controls {
+  display:flex; flex-wrap:wrap; gap:20px; align-items:center;
+  background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px;
+  padding:10px 16px; margin:4px 0 18px 0; font-size:0.87em;
+}
+.vc-group { display:flex; align-items:center; gap:8px; }
+.vc-group label { color:#444; white-space:nowrap; }
+.vc-group input[type=range] { width:130px; cursor:pointer; }
+.vc-val  { font-weight:700; color:#2C3E50; min-width:30px; display:inline-block; }
+.vc-note { font-size:0.82em; color:#888; font-style:italic; }
+.vc-summary { color:#555; }
+.vc-summary strong { color:#C0392B; }
+
+/* ---- Family reference table ---- */
+.family-ref-table { width:100%; border-collapse:collapse; font-size:0.85em;
+                    margin:12px 0; }
+.family-ref-table th { background:#34495E; color:white; padding:7px 10px;
+                       text-align:left; font-size:0.88em; }
+.family-ref-table td { padding:6px 10px; border-bottom:1px solid #ecf0f1;
+                       vertical-align:top; }
+.family-ref-table tr:hover td { background:#f8f9fa; }
+.fam-abbr { font-family:monospace; font-weight:700; color:#2C3E50; }
+.fam-type-count    { color:#27AE60; }
+.fam-type-positive { color:#E67E22; }
+.fam-type-unit     { color:#8E44AD; }
+.fam-type-real     { color:#2980B9; }
+
+/* ---- Footer ---- */
+.perseo-footer {
+  margin-top:48px; padding:20px; border-top:2px solid #2C3E50;
+  background:#f8f9fa; text-align:center;
+}
+.footer-brand { font-weight:700; font-size:0.95em; color:#2C3E50; }
+.footer-links { margin:8px 0; font-size:0.9em; }
+.footer-links a { color:#2C3E50; font-weight:600; text-decoration:none; margin:0 8px; }
+.footer-links a:hover { text-decoration:underline; }
+.footer-meta  { font-size:0.8em; color:#999; margin-top:5px; }
+
+/* ---- Section headings ---- */
+h1 { color:#2C3E50; border-bottom:2px solid #ecf0f1; padding-bottom:6px; }
+h2 { color:#34495E; margin-top:28px; }
+h3 { color:#34495E; border-left:4px solid #3498db;
+     padding-left:10px; margin-top:28px; }
+
+/* ---- ggiraph ---- */
+.girafe_container_std { margin:12px auto; }
+
+/* ---- DataTables ---- */
+.dataTables_wrapper .dataTables_filter input {
+  border-radius:4px; border:1px solid #ccc; padding:4px 8px;
+}
+
+/* ---- Section anchors (invisible) ---- */
+.sec-anchor { display:block; height:0; overflow:hidden; }
+"
+cat("<style>", css, "</style>\n")
+```
+
+```{r emit-sidebar, results='asis'}
+cat(as.character(HTML(sidebar_html)), "\n")
+```
+
+```{r header}
+HTML(paste0('
+<div class="perseo-header">
+  <img src="https://raw.githubusercontent.com/OPSergio/Perseo/main/assets/logo_perseo.png"
+       class="perseo-logo" alt="PERSEO" onerror="this.style.display=\'none\'">
+  <div class="perseo-header-text">
+    <h1 class="perseo-report-title">', htmlEscape(params$report_title), '</h1>
+    <p class="perseo-subtitle">
+      PERSEO&nbsp;v', pkg_version,
+      '&nbsp;&nbsp;&bull;&nbsp;&nbsp;GAMLSS-based Differential Expression',
+      '&nbsp;&nbsp;&bull;&nbsp;&nbsp;', format(Sys.time(), "%B %d, %Y"),
+    '</p>
+  </div>
+</div>
+<p class="perseo-intro">
+  <strong>PERSEO</strong> is a model-aware differential expression framework for omics data.
+  Unlike conventional pipelines (DESeq2, edgeR, limma) that force <em>all</em> features
+  into a single statistical family (e.g. Negative Binomial for all genes in RNA-seq),
+  PERSEO evaluates up to 18 different
+  <abbr title="Generalised Additive Models for Location, Scale and Shape">GAMLSS</abbr>
+  families and selects the best-fitting distribution <em>per feature</em>.
+  This makes PERSEO suitable for heterogeneous datasets where different features may follow
+  count, continuous-positive, proportion, or real-valued distributions &mdash; even within
+  the same experiment. Use the left panel to navigate between sections.
+</p>
+'))
+```
+
+---
+
+<div id="s0" class="sec-anchor"></div>
+
+# 0 &mdash; Analysis Parameters
+
+> **Full record of all parameters used in this analysis.** Intended for reproducibility
+> and methods reporting. Each parameter is shown alongside a brief explanation.
+
+```{r params-table}
+s <- smry
+
 tm_desc <- switch(s$transform_mode %||% "strict",
-  "strict" = "Only uses families whose support exactly matches the data range
-              (e.g. count families for non-negative integers). Safest choice
-              for heterogeneous omics data.",
-  "safe"   = "Broader family matching with log/logit rescaling where needed.
-              More permissive; suitable when support mismatches are expected.",
+  "strict" = "Only families whose mathematical support exactly matches the observed data
+              range are evaluated per feature. Safest choice for heterogeneous omics data.",
+  "safe"   = "Broader family matching with log/logit rescaling where needed. More
+              permissive; suitable when support mismatches are expected.",
   s$transform_mode)
 
 crit_desc <- switch(s$criterion %||% "GAIC",
-  "GAIC" = paste0("Generalised AIC with penalty k = ", s$gaic_k,
+  "GAIC" = paste0("Generalised AIC with penalty k = ", s$gaic_k %||% "?",
                   ". Balances fit and complexity; recommended for omics."),
   "BIC"  = "Bayesian Information Criterion — stronger complexity penalty than AIC.",
   "AIC"  = "Akaike Information Criterion — standard penalised likelihood.",
@@ -241,64 +594,65 @@ crit_desc <- switch(s$criterion %||% "GAIC",
 padj_desc <- switch(s$p_adjust_method %||% "BH",
   "BH"         = "Benjamini-Hochberg FDR control. Recommended for high-dimensional data.",
   "bonferroni" = "Bonferroni correction. Very conservative for large feature sets.",
-  "none"       = "No adjustment applied.",
+  "none"        = "No adjustment applied.",
   s$p_adjust_method)
 
 rows <- paste0(
   ph("Data"),
-  prow("Features", format(s$n_features_total, big.mark = ","),
+  prow("Features", format(s$n_features_total %||% "?", big.mark = ","),
        "Total genomic features in the input counts matrix."),
-  prow("Samples", format(s$n_samples, big.mark = ","),
+  prow("Samples", format(s$n_samples %||% "?", big.mark = ","),
        "Total samples (columns) in the counts matrix."),
   ph("Family Selection"),
   prow("Bootstrap", badge(s$bootstrap),
        "<strong>Yes</strong>: families evaluated on random feature subsets
         (n_genes &times; n_boot pulls). Faster and more robust.
-        <strong>No</strong>: all features evaluated (comprehensive but slow)."),
-  prow("Features per pull (n_genes)", s$n_features_sampled,
+        <strong>No</strong>: all features evaluated (comprehensive but slower)."),
+  prow("Features per pull (n_genes)", s$n_features_sampled %||% "&mdash;",
        "Features randomly sampled per bootstrap pull."),
-  prow("Bootstrap pulls (n_boot)", s$n_bootstrap_pulls,
+  prow("Bootstrap pulls (n_boot)", s$n_bootstrap_pulls %||% "&mdash;",
        "Independent resamples. More pulls &rarr; more stable frequency estimates."),
-  prow("Top N families (top_n)", s$top_n,
+  prow("Top N families (top_n)", s$top_n %||% "&mdash;",
        "Top-ranked families passed to the differential expression step."),
   prow("Group by support", badge(s$group_by_support),
-       "Restricts candidates to families whose mathematical domain is compatible
-        with observed data range per feature."),
-  prow("Zero-inflation threshold", s$thr_zero,
-       "Min proportion of exact zeros to consider zero-inflated families (ZIP, ZINBI)."),
-  prow("One-inflation threshold", s$thr_one,
-       "Min proportion of exact ones to consider one-inflated families (BEINF)."),
+       "Restricts candidates to families compatible with each feature's data range
+        (e.g. count families for integer data, Beta for proportions)."),
+  prow("Zero-inflation threshold", s$thr_zero %||% "&mdash;",
+       "Min proportion of exact zeros to activate zero-inflated families (ZIP, ZINBI)."),
+  prow("One-inflation threshold",  s$thr_one  %||% "&mdash;",
+       "Min proportion of exact ones to activate one-inflated families (BEINF)."),
   prow("Candidate families",
-       if (identical(s$families_candidate, "default")) "Default set"
+       if (identical(s$families_candidate, "default")) "Default set (18 families)"
        else paste(s$families_candidate, collapse = ", "),
        "Distributional families evaluated during bootstrap family selection."),
-  prow("Selected families", paste(s$families_selected, collapse = ", "),
-       "Families used for differential expression model fitting."),
+  prow("Selected families", paste(s$families_selected %||% "?", collapse = ", "),
+       "Families carried forward to the differential expression model fitting step."),
   ph("Model Fitting"),
-  prow("Information criterion", s$criterion, crit_desc),
-  prow("Transform mode", paste0('<code>', s$transform_mode, '</code>'), tm_desc),
-  prow("Min. valid observations (min_n)", s$min_n,
-       "Features with fewer valid observations are skipped."),
+  prow("Information criterion", s$criterion %||% "?", crit_desc),
+  prow("Transform mode", paste0('<code>', s$transform_mode %||% "?", '</code>'), tm_desc),
+  prow("Min. valid observations (min_n)", s$min_n %||% "&mdash;",
+       "Features with fewer valid observations after masking are skipped."),
   ph("Contrasts &amp; Omnibus Test"),
   prow("Contrast matrix supplied", badge(s$has_contrast_matrix),
        "Whether a user-defined numeric contrast matrix was provided."),
-  prow("Contrast variable", s$contrast_variable,
-       "Variable for which all pairwise contrasts are auto-generated.
-        <code>none</code> = manual matrix or no contrasts."),
+  prow("Contrast variable", s$contrast_variable %||% "<em>none</em>",
+       "Variable for which all pairwise contrasts are auto-generated. <code>none</code>
+        means a manual contrast matrix was provided or no contrasts requested."),
   prow("Omnibus test", badge(s$omnibus),
-       "<strong>Yes</strong>: joint Wald/LRT test run before contrasts;
-        only features that pass proceed to pairwise comparisons."),
-  prow("Omnibus test type",  as.character(s$omnibus_test),
-       "Wald (fast) or Likelihood Ratio Test (more robust for small n)."),
-  prow("Omnibus threshold", as.character(s$omnibus_threshold),
+       "<strong>Yes</strong>: a joint Wald/LRT test is run per feature before contrasts;
+        only features that pass (p &lt; threshold) proceed to pairwise comparisons."),
+  prow("Omnibus test type",  as.character(s$omnibus_test %||% "&mdash;"),
+       "Wald (fast, uses covariance matrix of fitted model) or Likelihood Ratio Test
+        (more robust for small n; requires refitting a reduced model)."),
+  prow("Omnibus threshold",  as.character(s$omnibus_threshold %||% "&mdash;"),
        "p-value cut-off for the omnibus gatekeeper filter."),
   ph("Multiple Testing Correction"),
-  prow("Method", s$p_adjust_method, padj_desc),
+  prow("Method", s$p_adjust_method %||% "?", padj_desc),
   ph("Parallelisation"),
   prow("Parallel", badge(s$parallel),
-       "Feature-level fitting parallelised via the <code>future</code> backend."),
-  prow("Workers", as.character(s$workers),
-       "Parallel workers used. <code>&mdash;</code> when disabled."),
+       "Feature-level model fitting parallelised via the <code>future</code> backend."),
+  prow("Workers", as.character(s$workers %||% "&mdash;"),
+       "Number of parallel workers used. <code>&mdash;</code> if parallelisation disabled."),
   ph("Execution"),
   prow("Run timestamp", s$run_timestamp %||% "&mdash;",
        "Date and time the analysis was executed."),
@@ -309,8 +663,8 @@ rows <- paste0(
 HTML(paste0(
   '<table class="param-table">',
   '<thead><tr>',
-  '<th style="width:22%">Parameter</th>',
-  '<th style="width:18%">Value</th>',
+  '<th style="width:23%">Parameter</th>',
+  '<th style="width:17%">Value</th>',
   '<th>Description</th>',
   '</tr></thead>',
   '<tbody>', rows, '</tbody>',
@@ -320,198 +674,635 @@ HTML(paste0(
 
 ---
 
-# 1 — Summary
+<div id="s1" class="sec-anchor"></div>
 
-> **Overview of the PERSEO pipeline results.** KPI cards summarise the key
-> counts from the analysis.
+# 1 &mdash; Summary
+
+> **Overview of the PERSEO pipeline results.** KPI cards summarise the key counts.
+> The &ldquo;Significant features&rdquo; card uses the same criteria as the volcano plots
+> and contrast tables, ensuring consistency throughout the report.
 
 ```{r kpis}
-results_df   <- de$results   %||% data.frame()
-contrasts_df <- de$contrasts %||% data.frame()
-
-n_features <- nrow(de$selection %||% data.frame())
-n_sig <- if (nrow(results_df) > 0 && "p_adj" %in% names(results_df)) {
-  r <- results_df[results_df$term != "(Intercept)", ]
-  length(unique(r$feature[!is.na(r$p_adj) & r$p_adj < 0.05]))
-} else 0L
-
-n_families  <- length(fs$top_families_overall)
-n_contrasts <- if (has_contrasts) length(unique(contrasts_df$contrast)) else 0L
-
-kpi <- function(value, label, sig = FALSE) {
-  cls <- if (sig) "kpi-box kpi-sig" else "kpi-box"
-  paste0('<div class="', cls, '">',
-         '<div class="kpi-value">', value, '</div>',
-         '<div class="kpi-label">', label, '</div>',
-         '</div>')
-}
-
 HTML(paste0(
   '<div class="kpi-row">',
-  kpi(format(n_features, big.mark = ","),  "Features tested"),
-  kpi(format(n_sig,      big.mark = ","),  "Significant features<br><small>(FDR &lt; 5%)</small>", sig = TRUE),
-  kpi(n_families,                          "Families selected"),
-  kpi(n_contrasts,                         "Contrasts computed"),
+  kpi(format(n_features, big.mark = ","),
+      "Features tested"),
+  kpi(format(n_sig, big.mark = ","),
+      "Significant features",
+      note = sig_source_label,
+      sig  = TRUE),
+  kpi(n_families,    "Families selected"),
+  kpi(n_contrasts,   "Contrasts computed"),
   '</div>'
 ))
 ```
 
 ---
 
-# 2 — Family Selection
+<div id="s2" class="sec-anchor"></div>
 
-> **Distribution of best-fitting GAMLSS families across all features.** PERSEO
-> evaluates multiple candidate families and selects the one with the lowest
-> Jacobian-corrected information criterion per feature. Hover over bars for
-> exact counts.
+# 2 &mdash; Family Selection
+
+> **Distribution of best-fitting GAMLSS families across all features.** PERSEO evaluates
+> multiple candidate families and selects the one with the lowest Jacobian-corrected
+> information criterion per feature. Hover over bars for exact counts.
+
+```{r s2-infobox, results='asis'}
+cat(info_box(
+  "How family selection works",
+  paste0(
+    "<p>PERSEO tests each candidate family on a feature using the same set of valid ",
+    "observations (the <em>common mask</em> &mdash; intersection of all family validity ",
+    "masks). Each family transforms the response to its natural domain, then fits an ",
+    "intercept-only GAMLSS model and computes a <strong>Jacobian-corrected information ",
+    "criterion</strong> (IC). The Jacobian correction ensures the IC values are ",
+    "comparable on the <em>original data scale</em>, not the transformed scale &mdash; ",
+    "this is essential for a fair comparison across families with different supports ",
+    "(counts, proportions, positive-continuous, real-valued).</p>",
+    "<p>Because evaluating all families on all features would be computationally ",
+    "expensive, PERSEO uses a <strong>bootstrap</strong> step: it samples ",
+    "<code>n_genes</code> random features for <code>n_boot</code> independent pulls, ",
+    "records which family wins most often, and passes the top <code>top_n</code> ",
+    "families to the full differential expression step. Features with different ",
+    "data characteristics (e.g. some following a Negative Binomial, others a Gamma ",
+    "distribution) will end up with different best-fitting families.</p>",
+    "<p><strong>Support categories:</strong> Count (non-negative integers) &bull; ",
+    "Unit interval (values in [0,1]) &bull; Positive continuous (y&nbsp;&gt;&nbsp;0) ",
+    "&bull; Real-valued (&minus;&infin; to +&infin;).</p>"
+  )
+))
+```
 
 ```{r family-barplot, fig.height=4}
 sel_df <- de$selection
 if (!is.null(sel_df) && nrow(sel_df) > 0 && "best_family" %in% names(sel_df)) {
+  fi_lookup <- vapply(names(.family_info), function(k) .family_info[[k]]$full,
+                      character(1))
   fam_counts <- sel_df %>%
     count(Family = best_family, name = "n") %>%
     arrange(desc(n)) %>%
-    mutate(pct     = n / sum(n) * 100,
-           tooltip = paste0("<b>", Family, "</b><br/>n = ", n,
-                            " (", round(pct, 1), "%)"),
-           data_id = Family)
+    mutate(
+      pct     = n / sum(n) * 100,
+      full    = fi_lookup[Family],
+      tooltip = paste0("<b>", Family, "</b>",
+                       ifelse(!is.na(full), paste0("<br/><em>", full, "</em>"), ""),
+                       "<br/>n\u00a0=\u00a0", n, " (", round(pct, 1), "%)"),
+      data_id = Family)
 
   gg <- ggplot2::ggplot(fam_counts,
-           ggplot2::aes(x = reorder(Family, n), y = n, fill = Family,
-                        tooltip = tooltip, data_id = data_id)) +
+      ggplot2::aes(x = reorder(Family, n), y = n, fill = Family,
+                   tooltip = tooltip, data_id = data_id)) +
     ggiraph::geom_col_interactive(width = 0.7, show.legend = FALSE) +
     ggplot2::coord_flip() +
     ggplot2::scale_fill_viridis_d(option = "D", begin = 0.2, end = 0.85) +
-    ggplot2::labs(x = NULL, y = "Number of features") +
+    ggplot2::labs(x = NULL, y = "Number of features",
+                  title = "Best-fitting GAMLSS family per feature") +
     theme_rmd()
 
   as_girafe(gg, w = 7, h = max(3, 0.4 * nrow(fam_counts) + 1))
 }
 ```
 
-```{r family-table}
+```{r ic-histogram}
+if (!is.null(sel_df) && nrow(sel_df) > 0 &&
+    "ic_value" %in% names(sel_df) && "best_family" %in% names(sel_df)) {
+  ic_finite <- sel_df[is.finite(sel_df$ic_value), ]
+  if (nrow(ic_finite) > 10) {
+    gg_ic <- ggplot2::ggplot(ic_finite,
+        ggplot2::aes(x = ic_value, fill = best_family)) +
+      ggplot2::geom_histogram(bins = 60, alpha = 0.85, colour = "white") +
+      ggplot2::scale_fill_viridis_d(option = "D", begin = 0.2, end = 0.85,
+                                     name = "Family") +
+      ggplot2::labs(x = "Jacobian-corrected IC (best model per feature)",
+                    y = "Number of features",
+                    caption = paste0("Lower IC = better model fit. ",
+                      "Features with very high IC may have poor model fit.")) +
+      theme_rmd()
+    print(gg_ic)
+  }
+}
+```
+
+```{r family-ref-table, results='asis'}
+type_class <- c("Count" = "fam-type-count", "Positive continuous" = "fam-type-positive",
+                "Unit interval" = "fam-type-unit", "Real-valued" = "fam-type-real")
+
+fam_rows <- ""
+for (abbr in names(.family_info)) {
+  fi   <- .family_info[[abbr]]
+  tcls <- type_class[fi$type]
+  if (is.na(tcls)) tcls <- ""
+  fam_rows <- paste0(fam_rows,
+    sprintf('<tr><td class="fam-abbr">%s</td><td>%s</td>',
+            htmlEscape(abbr), htmlEscape(fi$full)),
+    sprintf('<td class="%s">%s</td><td>%s</td></tr>\n',
+            tcls, htmlEscape(fi$type), htmlEscape(fi$desc)))
+}
+
+cat(info_box(
+  "GAMLSS family reference",
+  paste0(
+    '<table class="family-ref-table">',
+    '<thead><tr><th>Abbrev.</th><th>Full name</th>',
+    '<th>Data type</th><th>When to use</th></tr></thead>',
+    '<tbody>', fam_rows, '</tbody></table>'
+  )
+))
+```
+
+```{r family-freq-table}
 if (!is.null(sel_df) && nrow(sel_df) > 0 && "best_family" %in% names(sel_df)) {
   fam_tbl <- sel_df %>%
-    count(Family = best_family, name = "Count") %>%
+    count(Abbrev. = best_family, name = "Count") %>%
     arrange(desc(Count)) %>%
-    mutate(Proportion = paste0(round(Count / sum(Count) * 100, 1), "%"))
+    mutate(
+      Proportion = paste0(round(Count / sum(Count) * 100, 1), "%"),
+      `Full name` = vapply(Abbrev., function(f) {
+        if (!is.null(.family_info[[f]])) .family_info[[f]]$full else f
+      }, character(1))
+    ) %>%
+    select(Abbrev., `Full name`, Count, Proportion)
+
   datatable(fam_tbl, rownames = FALSE,
-            caption = "Selected family frequencies",
-            options = list(pageLength = 10, dom = "tip"))
+            caption = "Family selection frequencies",
+            options = list(pageLength = 20, dom = "tip"))
 }
 ```
 
 ---
 
-# 3 — Differential Expression
+<div id="s3" class="sec-anchor"></div>
 
-> **Coefficient-level results for all features and model terms.** Each row is
-> one feature-term combination. The `effect` column contains the estimated
-> coefficient on the link scale. Use the column filters to drill down by
-> feature, term, or family.
+# 3 &mdash; All Contrasts
 
-```{r de-table}
-if (!is.null(results_df) && nrow(results_df) > 0) {
-  display_cols <- intersect(
-    c("feature", "term", "effect", "pval", "padj", "p_adj", "best_family", "family"),
-    names(results_df))
-  dt_df <- results_df[, display_cols, drop = FALSE]
-  for (col in intersect(c("effect", "pval", "padj", "p_adj"), names(dt_df)))
-    dt_df[[col]] <- signif(dt_df[[col]], 4)
+> **Complete pairwise contrast table** &mdash; every feature &times; every contrast,
+> searchable, filterable, and downloadable as CSV or Excel. This is the single source
+> of truth for downstream analyses (<code>result$differential_expression$contrasts</code>).
 
-  datatable(dt_df, rownames = FALSE, filter = "top",
-            caption = "Differential expression results (all terms)",
-            options  = list(pageLength = 15, scrollX = TRUE,
-                            dom = "lBfrtip", buttons = list("csv", "excel")),
-            extensions = "Buttons") %>%
-    formatStyle(columns    = intersect(c("padj", "p_adj"), names(dt_df)),
-                background = styleInterval(c(0.01, 0.05),
-                                           c("#ffe6e6", "#fff3e6", "white")))
-}
-```
-
----
-
-```{r contrasts-section, results='asis'}
-cat("# 4 — Contrasts {.tabset}\n\n")
+```{r s3-reference-info, results='asis'}
 if (has_contrasts) {
-  cat("> **Pairwise group comparisons computed via linear contrasts.**\n")
-  cat("> Each tab shows an interactive Volcano plot (LFC vs &minus;log&#x2081;&#x2080; p-adj)\n")
-  cat("> and an MA plot for one contrast. Hover over any point to inspect the\n")
-  cat("> feature name, LFC and adjusted p-value. The table lists the top 50 hits.\n\n")
-} else {
-  cat("> **No contrasts were computed in this analysis.**\n")
-  cat("> To enable this section, pass `contrast_variable` or `contrast_matrix`\n")
-  cat("> to `run_perseo()`. Example: `run_perseo(..., contrast_variable = \"group\")`.\n\n")
+  # Infer reference level(s) from contrast names ("B vs A" pattern -> A is reference).
+  ref_levels <- tryCatch({
+    parts <- strsplit(contrast_names, "\\s+vs\\s+")
+    vapply(parts, function(p) if (length(p) == 2) p[2] else NA_character_,
+           character(1))
+  }, error = function(e) character(0))
+  ref_levels <- unique(ref_levels[!is.na(ref_levels)])
+
+  ref_txt <- if (length(ref_levels) == 1)
+    paste0("<code>", htmlEscape(ref_levels), "</code>")
+  else if (length(ref_levels) > 1)
+    paste(sprintf("<code>%s</code>", htmlEscape(ref_levels)), collapse = ", ")
+  else "<em>not determined automatically</em>"
+
+  cv_txt <- if (!is.null(smry$contrast_variable))
+    paste0("<code>", htmlEscape(smry$contrast_variable), "</code>")
+  else "<em>not specified</em>"
+
+  cat(sprintf(paste0(
+    '<div class="ref-note"><strong>Contrast variable:</strong> %s &nbsp;&bull;&nbsp; ',
+    '<strong>Reference level:</strong> %s &nbsp;&bull;&nbsp; ',
+    '<strong>Contrasts:</strong> %d &nbsp;&bull;&nbsp; ',
+    '<strong>Rows:</strong> %s</div>\n\n'),
+    cv_txt, ref_txt, n_contrasts,
+    format(nrow(contrasts_df), big.mark = ",")))
 }
 ```
 
-```{r contrast-tabs, results='asis', eval=has_contrasts}
-for (cname in unique(contrasts_df$contrast)) {
-  cat(sprintf("\n## %s\n\n", cname))
+```{r s3-infobox, results='asis'}
+cat(info_box(
+  "Interpreting contrasts: link scale & reference",
+  paste0(
+    "<p>A pairwise contrast <code>B vs A</code> estimates <em>&mu;<sub>B</sub> &minus; ",
+    "&mu;<sub>A</sub></em> on the <strong>link scale</strong>. The second name ",
+    "(<code>A</code>) is the <strong>reference</strong>: a positive estimate means the ",
+    "feature is higher in <code>B</code> than in <code>A</code>.</p>",
+    "<ul>",
+    "<li><strong>Log-link families</strong> (NBI, PO, ZIP, ZINBI, GA, GG, LOGNO, IG): ",
+    "Estimate = log(fold-change). Fold-change = <code>exp(Estimate)</code>.</li>",
+    "<li><strong>Logit-link families</strong> (BI, BB, BE, BEZI, BEO, BEINF): ",
+    "Estimate = log-odds difference.</li>",
+    "<li><strong>Identity-link families</strong> (NO, TF, GU): ",
+    "Estimate = raw mean difference on the original scale.</li>",
+    "</ul>",
+    "<p>When there are more than two levels, <em>all</em> pairwise post-hoc contrasts ",
+    "are reported (not just reference-vs-level). With only two levels, a single ",
+    "<code>level vs reference</code> contrast appears. P-values are adjusted ",
+    "<em>within</em> each contrast across all features using the method specified ",
+    "in section 0.</p>"
+  )
+))
+```
 
-  df_c <- contrasts_df[contrasts_df$contrast == cname, ]
+```{r contrasts-table}
+if (has_contrasts && nrow(contrasts_df) > 0) {
+  tbl <- contrasts_df
+  if (!is.null(de$selection) && "best_family" %in% names(de$selection)) {
+    tbl$best_family <- de$selection$best_family[match(tbl$feature,
+                                                      de$selection$feature)]
+  }
+
+  keep <- intersect(
+    c("feature", "contrast", "estimate", "se", "z", "p_value", "p_adj",
+      "best_family"),
+    names(tbl)
+  )
+  tbl <- tbl[, keep, drop = FALSE]
+
+  # Round numeric columns
+  for (nm in intersect(c("estimate", "se"), names(tbl)))
+    tbl[[nm]] <- signif(tbl[[nm]], 4)
+  if ("z"       %in% names(tbl)) tbl$z       <- round(tbl$z, 3)
+  if ("p_value" %in% names(tbl)) tbl$p_value <- signif(tbl$p_value, 3)
+  if ("p_adj"   %in% names(tbl)) tbl$p_adj   <- signif(tbl$p_adj, 3)
+
+  if ("best_family" %in% names(tbl)) {
+    tbl$best_family <- sapply(tbl$best_family, function(f)
+      if (is.na(f) || f == "") "&mdash;" else family_badge(f))
+  }
+
+  dt <- datatable(
+    tbl,
+    rownames    = FALSE,
+    escape      = FALSE,
+    filter      = "top",
+    caption     = htmltools::tags$caption(
+      style = "caption-side: top; text-align: left; font-weight:600;",
+      "result$differential_expression$contrasts \u2014 all pairwise comparisons"
+    ),
+    extensions  = c("Buttons", "Scroller"),
+    options     = list(
+      dom         = "lBfrtip",
+      buttons     = list(
+        list(extend = "csv",   filename = "perseo_contrasts",
+             text   = '<span>&#x2B07; CSV</span>'),
+        list(extend = "excel", filename = "perseo_contrasts",
+             title  = params$report_title,
+             text   = '<span>&#x2B07; Excel</span>')
+      ),
+      scrollX    = TRUE,
+      scrollY    = "500px",
+      scroller   = TRUE,
+      pageLength = 25
+    )
+  )
+  if ("p_adj" %in% names(tbl)) {
+    dt <- dt %>% formatStyle(
+      "p_adj",
+      background = styleInterval(c(0.01, 0.05),
+                                 c("#ffe6e6", "#fff3e6", "white")))
+  }
+  dt
+} else {
+  HTML("<p><em>No contrast results available. Pass ",
+       "<code>contrast_variable</code> to <code>run_perseo()</code> to enable ",
+       "pairwise comparisons.</em></p>")
+}
+```
+
+---
+
+<div id="s4" class="sec-anchor"></div>
+
+# 4 &mdash; Contrasts {.tabset .tabset-pills}
+
+```{r s4-infobox, results='asis'}
+cat(info_box(
+  "How to read each tab",
+  paste0(
+    "<p>Each tab shows the results of one pairwise contrast <code>B vs A</code>. ",
+    "The estimate (<strong>LFC</strong> &mdash; log fold-change for log-link families) ",
+    "is <em>&mu;<sub>B</sub> &minus; &mu;<sub>A</sub></em> on the link scale. ",
+    "Positive &rArr; higher in B (second name); negative &rArr; higher in A (reference).</p>",
+
+    "<p><strong>Volcano plot</strong> &mdash; X: LFC, Y: &minus;log<sub>10</sub>(p-adj). ",
+    "The top-right and top-left corners contain the most biologically and statistically ",
+    "interesting features:</p>",
+    "<ul>",
+    "<li><span style='color:#C0392B;font-weight:700'>Red &mdash; Sig &amp; LFC</span>: ",
+    "passes both the FDR and the |LFC| threshold (what you usually want).</li>",
+    "<li><span style='color:#F4A460;font-weight:700'>Orange &mdash; FDR only</span>: ",
+    "significant but small effect size.</li>",
+    "<li><span style='color:#4E9FD4;font-weight:700'>Blue &mdash; LFC only</span>: ",
+    "large effect but not statistically robust.</li>",
+    "<li><span style='color:#888;font-weight:700'>Grey &mdash; Not sig</span>.</li>",
+    "</ul>",
+    "<p>Move the <em>FDR</em> and <em>|LFC|</em> sliders under each volcano to ",
+    "re-classify the points live (the dashed reference lines remain fixed at the ",
+    "initial thresholds &mdash; they are guides, not the cut-off).</p>",
+
+    "<p><strong>MA plot</strong> &mdash; effect size vs. expression level. If significant ",
+    "features cluster at one end of the X axis, effect size depends on expression level ",
+    "(a signal of model miscalibration or mean-variance issues).</p>",
+
+    "<p><strong>QQ plot (p-value)</strong> &mdash; observed &minus;log<sub>10</sub>(p) vs. ",
+    "expected under a uniform null. Points on the diagonal &rArr; well-calibrated null. ",
+    "Deviation above the diagonal in the right tail &rArr; true differential features. ",
+    "A systematic lift across <em>all</em> p-values (not only the tail) suggests inflation ",
+    "and potential model misspecification.</p>",
+
+    "<p><strong>Top 20 hits</strong> &mdash; the 20 features with the smallest adjusted ",
+    "p-value for this contrast. The full table is in section 3.</p>"
+  )
+))
+```
+
+```{r contrast-sections, results='asis', eval=has_contrasts}
+for (i in seq_along(contrast_names)) {
+  cname <- contrast_names[i]
+  slug  <- contrast_slugs[i]
+
+  df_c <- contrasts_df[contrasts_df$contrast == cname, , drop = FALSE]
   if (!is.null(de$selection) && "best_family" %in% names(de$selection))
     df_c <- merge(df_c, de$selection[, c("feature", "best_family")],
                   by = "feature", all.x = TRUE)
 
-  n_sig_c <- sum(!is.na(df_c$p_adj) & df_c$p_adj < 0.05)
-  cat(sprintf("**%d significant features** (FDR &lt; 5%%) out of %d tested.\n\n",
-              n_sig_c, nrow(df_c)))
+  # Count using the same thresholds as KPIs
+  n_sig_c <- sum(!is.na(df_c$p_adj) &
+                   df_c$p_adj < .fdr_threshold &
+                   abs(df_c$estimate) >= .lfc_threshold,
+                 na.rm = TRUE)
 
-  # Volcano
+  # Tab header (##) — rendered as a pill tab by the parent {.tabset}.
+  cat(sprintf('\n## %s {#c-%s}\n\n', cname, slug))
+  cat(sprintf('<div id="csec-%s">\n\n', slug))
+  cat(sprintf(
+    "<p><strong>%d significant features</strong> (FDR&nbsp;&lt;&nbsp;%.3f &amp; |LFC|&nbsp;&ge;&nbsp;%.1f) out of %d tested.</p>\n\n",
+    n_sig_c, .fdr_threshold, .lfc_threshold, nrow(df_c)))
+
+  # Embed JSON data for JS sliders
+  if (has_jsonlite) {
+    json_cols <- intersect(c("feature", "estimate", "p_adj"), names(df_c))
+    json_data <- jsonlite::toJSON(df_c[, json_cols, drop = FALSE],
+                                  dataframe = "rows", na = "null")
+    cat(sprintf('<script id="cdata-%s" type="application/json">%s</script>\n\n',
+                slug, json_data))
+  }
+
+  # --- Volcano plot ---
   tryCatch({
-    cat("**Volcano plot** — log fold change vs. &minus;log&#x2081;&#x2080;(p-adj).\n\n")
+    cat("### Volcano plot\n\n")
     print(tagList(as_girafe(make_volcano(df_c))))
     cat("\n\n")
+
+    # Slider controls
+    if (has_jsonlite) {
+      cat(sprintf(
+        '<div class="volcano-controls" id="ctrl-%s">\n',
+        slug))
+      cat(sprintf(
+        '  <div class="vc-group"><label>FDR threshold:&nbsp;
+           <span class="vc-val fdr-val">%.3f</span></label>
+           <input type="range" class="fdr-slider" min="0.001" max="0.25"
+                  step="0.005" value="%.3f"></div>\n',
+        .fdr_threshold, .fdr_threshold))
+      cat(sprintf(
+        '  <div class="vc-group"><label>|LFC| min:&nbsp;
+           <span class="vc-val lfc-val">%.1f</span></label>
+           <input type="range" class="lfc-slider" min="0" max="5"
+                  step="0.1" value="%.1f"></div>\n',
+        .lfc_threshold, .lfc_threshold))
+      cat('  <div class="vc-summary">Sig &amp; LFC:&nbsp;<strong class="sig-count">&hellip;</strong></div>\n')
+      cat('  <span class="vc-note">Dashed reference lines stay fixed; point colours update live.</span>\n')
+      cat('</div>\n\n')
+    }
   }, error = function(e) {
-    cat(sprintf("> *Volcano plot could not be rendered: %s*\n\n",
-                conditionMessage(e)))
+    cat(sprintf("> *Volcano plot could not be rendered: %s*\n\n", conditionMessage(e)))
   })
 
-  # MA
+  # --- MA plot ---
   tryCatch({
-    cat("**MA plot** — mean expression vs. log fold change.\n\n")
+    cat("### MA plot\n\n")
     print(tagList(as_girafe(make_ma(df_c))))
     cat("\n\n")
   }, error = function(e) {
-    cat(sprintf("> *MA plot could not be rendered: %s*\n\n",
-                conditionMessage(e)))
+    cat(sprintf("> *MA plot could not be rendered: %s*\n\n", conditionMessage(e)))
   })
 
-  # Top hits table
+  # --- QQ plot of p-values ---
   tryCatch({
-    cat("**Top hits** (up to 50 features with lowest adjusted p-value).\n\n")
+    pv_col_c <- intersect(c("p_value", "pval"), names(df_c))[1]
+    if (!is.na(pv_col_c)) {
+      pv_vals <- df_c[[pv_col_c]]
+      pv_vals <- pv_vals[is.finite(pv_vals) & pv_vals > 0 & pv_vals <= 1]
+      n_pv <- length(pv_vals)
+      if (n_pv >= 5) {
+        cat("### P-value QQ plot\n\n")
+        obs  <- -log10(sort(pv_vals))
+        expn <- -log10(ppoints(n_pv))
+        df_qq <- data.frame(expected = expn, observed = obs)
+        lim <- max(df_qq$expected, df_qq$observed, na.rm = TRUE)
+        gg_qq <- ggplot2::ggplot(df_qq,
+            ggplot2::aes(x = expected, y = observed)) +
+          ggplot2::geom_abline(slope = 1, intercept = 0,
+                               colour = "#C0392B", linetype = "dashed") +
+          ggplot2::geom_point(size = 1.4, alpha = 0.7, colour = "#2C3E50") +
+          ggplot2::coord_equal(xlim = c(0, lim), ylim = c(0, lim)) +
+          ggplot2::labs(
+            x = expression(Expected~-log[10](p)),
+            y = expression(Observed~-log[10](p)),
+            caption = paste0("Diagonal = uniform null. Right-tail lift = true signal. ",
+                             "Global lift = potential inflation.")) +
+          theme_rmd()
+        print(gg_qq)
+        cat("\n\n")
+      }
+    }
+  }, error = function(e) {})
+
+  # --- Top 20 hits table (preview) ---
+  tryCatch({
+    cat("### Top 20 hits\n\n")
     top_tbl <- df_c %>%
       filter(!is.na(p_adj)) %>%
       arrange(p_adj) %>%
-      head(50) %>%
+      head(20) %>%
       mutate(
-        across(any_of(c("estimate", "se")), ~ round(., 4)),
+        across(any_of(c("estimate", "se")), ~ signif(., 4)),
         across(any_of("z"),       ~ round(., 3)),
         across(any_of("p_value"), ~ signif(., 3)),
         across(any_of("p_adj"),   ~ signif(., 3))
       ) %>%
       select(any_of(c("feature", "estimate", "se", "z", "p_value", "p_adj",
                       "best_family")))
+
+    if ("best_family" %in% names(top_tbl)) {
+      top_tbl$best_family <- sapply(top_tbl$best_family, function(f)
+        if (!is.na(f)) family_badge(f) else "&mdash;")
+    }
+
     print(tagList(
-      datatable(top_tbl, rownames = FALSE,
-                caption = paste0("Top features — ", cname),
-                options = list(pageLength = 10, dom = "tip", scrollX = TRUE))
+      datatable(top_tbl, rownames = FALSE, escape = FALSE,
+                options = list(pageLength = 20, dom = "tip", scrollX = TRUE))
     ))
     cat("\n\n")
   }, error = function(e) {
-    cat(sprintf("> *Top-hits table could not be rendered: %s*\n\n",
-                conditionMessage(e)))
+    cat(sprintf("> *Table error: %s*\n\n", conditionMessage(e)))
   })
+
+  cat('</div>\n\n')
 }
 ```
 
-```{r omnibus-section, results='asis', eval=has_omnibus}
-cat("# 5 — Omnibus Test\n\n")
-cat("> **Global test of joint factor significance (Wald or LRT).**\n")
-cat("> Tests whether any coefficient of the target factor is jointly non-zero.\n")
-cat("> Features with `pass = TRUE` proceeded to pairwise contrast computation.\n\n")
+```{r no-contrasts-msg, results='asis', eval=!has_contrasts}
+cat(paste0(
+  "<blockquote><p>",
+  "<strong>No contrasts were computed in this analysis.</strong><br/>",
+  "To enable contrast analysis, pass <code>contrast_variable</code> ",
+  "(e.g. <code>contrast_variable = \"group\"</code>) or a custom ",
+  "<code>contrast_matrix</code> to <code>run_perseo()</code>.</p></blockquote>\n\n"
+))
+```
+
+```{r s5-header, results='asis', eval=show_comparison}
+cat("<div id=\"s5\" class=\"sec-anchor\"></div>\n\n")
+cat("# 5 &mdash; Contrast Comparison\n\n")
+cat(paste0("> **Cross-contrast comparison of significant features.** ",
+           "The Venn / UpSet diagram shows feature overlap across contrasts ",
+           "(using FDR < ", .fdr_threshold, " and |LFC| \u2265 ", .lfc_threshold, "). ",
+           "The heatmap shows LFC for the top 40 features across all contrasts.\n\n"))
+```
+
+```{r venn-upset, eval=show_comparison}
+sig_sets <- lapply(setNames(nm = contrast_names), function(cn) {
+  dfc <- contrasts_df[contrasts_df$contrast == cn, ]
+  unique(dfc$feature[!is.na(dfc$p_adj) & dfc$p_adj < .fdr_threshold &
+                       abs(dfc$estimate) >= .lfc_threshold])
+})
+
+n_c <- length(contrast_names)
+has_venn  <- requireNamespace("ggVennDiagram", quietly = TRUE)
+has_upset <- requireNamespace("UpSetR",        quietly = TRUE)
+
+use_venn  <- n_c >= 2 && n_c <= 4 && has_venn
+use_upset <- !use_venn && n_c >= 2 && n_c <= 8 && has_upset
+
+if (use_venn) {
+  tryCatch({
+    venn_sets <- sig_sets[vapply(sig_sets, length, integer(1)) > 0]
+    if (length(venn_sets) >= 2) {
+      vp <- ggVennDiagram::ggVennDiagram(venn_sets, label_alpha = 0,
+                                          set_size = 3.5) +
+        ggplot2::scale_fill_gradient(low = "#EBF5FB", high = "#2980B9",
+                                     name = "Features") +
+        ggplot2::scale_colour_manual(values = rep("#2C3E50", length(venn_sets))) +
+        ggplot2::labs(title = paste0("Significant feature overlap (",
+                                     n_c, " contrasts)"),
+                      caption = paste0("FDR\u00a0<\u00a0", .fdr_threshold,
+                                       " \u2229 |LFC|\u00a0\u2265\u00a0",
+                                       .lfc_threshold)) +
+        ggplot2::theme_void(base_size = 12) +
+        ggplot2::theme(plot.title = ggplot2::element_text(face = "bold",
+                                                          hjust = 0.5))
+      print(vp)
+    }
+  }, error = function(e) {
+    message("ggVennDiagram error: ", conditionMessage(e))
+  })
+} else if (n_c >= 2 && n_c <= 8 && requireNamespace("UpSetR", quietly = TRUE)) {
+  tryCatch({
+    all_feats <- unique(unlist(sig_sets))
+    if (length(all_feats) > 0) {
+      mem_mat <- as.data.frame(
+        vapply(sig_sets, function(s) as.integer(all_feats %in% s),
+               integer(length(all_feats)))
+      )
+      row.names(mem_mat) <- all_feats
+      UpSetR::upset(mem_mat, order.by = "freq", point.size = 3.5,
+                    line.size  = 1.2, text.scale = 1.2,
+                    mainbar.y.label = "Feature intersections",
+                    sets.x.label    = paste0("Sig. features per contrast\n(FDR<",
+                                             .fdr_threshold, ", |LFC|\u2265",
+                                             .lfc_threshold, ")"))
+    }
+  }, error = function(e) {
+    message("UpSetR error: ", conditionMessage(e))
+  })
+} else if (n_c > 8) {
+  cat(paste0("> *Venn / UpSet diagram skipped: more than 8 contrasts (",
+             n_c, "). Use the heatmap and master table for cross-contrast exploration.*\n\n"))
+} else {
+  cat(paste0("> *Install `ggVennDiagram` (for \u22644 contrasts) or `UpSetR` ",
+             "(for 5\u20138 contrasts) to display the overlap diagram.*\n\n"))
+}
+```
+
+```{r lfc-heatmap, eval=show_comparison}
+tryCatch({
+  min_p_per_feat <- tapply(contrasts_df$p_adj, contrasts_df$feature,
+                           function(x) min(x, na.rm = TRUE))
+  min_p_per_feat <- min_p_per_feat[is.finite(min_p_per_feat)]
+  top_feat <- names(sort(min_p_per_feat))[seq_len(min(40L, length(min_p_per_feat)))]
+
+  if (length(top_feat) >= 2) {
+    heat_df <- contrasts_df[contrasts_df$feature %in% top_feat, ]
+    heat_df$feat_fac <- factor(heat_df$feature,
+                               levels = rev(top_feat))
+    lfc_lim <- max(abs(heat_df$estimate), na.rm = TRUE)
+    if (!is.finite(lfc_lim) || lfc_lim == 0) lfc_lim <- 3
+
+    heat_df$tooltip <- paste0(
+      "<b>", heat_df$feature, "</b><br/>",
+      heat_df$contrast, "<br/>",
+      "LFC: ", round(heat_df$estimate, 3), "<br/>",
+      "p-adj: ", signif(heat_df$p_adj, 3))
+    heat_df$data_id <- paste(heat_df$feature, heat_df$contrast, sep = "|")
+
+    gg_heat <- ggplot2::ggplot(heat_df,
+        ggplot2::aes(x = contrast, y = feat_fac, fill = estimate,
+                     tooltip = tooltip, data_id = data_id)) +
+      ggiraph::geom_tile_interactive(colour = "white", linewidth = 0.25) +
+      ggplot2::scale_fill_gradient2(
+        low = "#4E9FD4", mid = "white", high = "#C0392B",
+        midpoint = 0, limits = c(-lfc_lim, lfc_lim),
+        name = "LFC", na.value = "#EEEEEE") +
+      ggplot2::theme(
+        axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = ggplot2::element_text(size = 8)) +
+      ggplot2::labs(
+        x = NULL, y = NULL,
+        title = paste0("LFC heatmap \u2014 top ", length(top_feat),
+                       " features by min. adjusted p-value"),
+        caption = "Blue\u2009=\u2009lower in second group  \u2502  Red\u2009=\u2009higher in second group") +
+      theme_rmd()
+
+    tagList(as_girafe(gg_heat,
+                      w = max(7, 1.8 * length(contrast_names)),
+                      h = min(14, 0.28 * length(top_feat) + 2)))
+  }
+}, error = function(e) {
+  cat(paste0("> *Heatmap could not be rendered: ", conditionMessage(e), "*\n\n"))
+})
+```
+
+```{r omnibus-anchor, results='asis', eval=has_omnibus}
+cat(sprintf("<div id=\"s%d\" class=\"sec-anchor\"></div>\n\n", omnibus_sec_num))
+cat(sprintf("# %d &mdash; Omnibus Test\n\n", omnibus_sec_num))
+```
+
+```{r omnibus-infobox, results='asis', eval=has_omnibus}
+cat(info_box(
+  "What is the Omnibus Test?",
+  paste0(
+    "<p>The <strong>omnibus test</strong> is a global significance test that evaluates ",
+    "whether the target factor (e.g. treatment group) has <em>any</em> effect on a feature, ",
+    "jointly across all its levels, rather than testing individual pairwise differences.</p>",
+    "<ul>",
+    "<li><strong>Wald omnibus</strong>: uses the covariance matrix of the already-fitted ",
+    "model to compute W&nbsp;=&nbsp;&beta;'V<sup>&minus;1</sup>&beta;&nbsp;~&nbsp;&chi;<sup>2</sup>(df). ",
+    "Fast, no additional model fitting needed. Assumes large-sample asymptotics.</li>",
+    "<li><strong>LRT (Likelihood Ratio Test)</strong>: compares the full model against a ",
+    "reduced model without the target factor. More robust for small samples, but requires ",
+    "refitting a second model per feature (&asymp;2&times; slower).</li>",
+    "</ul>",
+    "<p>The omnibus test acts as a <strong>gatekeeper</strong>: only features with ",
+    "p&nbsp;&lt;&nbsp;omnibus_threshold proceed to pairwise contrast computation. ",
+    "This hierarchical approach (omnibus &rarr; contrasts) controls the family-wise ",
+    "Type&nbsp;I error rate more strictly than running contrasts without an omnibus filter. ",
+    "Features with <code>pass\u00a0=\u00a0FALSE</code> failed the omnibus test and were ",
+    "not tested further.</p>"
+  )
+))
 ```
 
 ```{r omnibus-table, eval=has_omnibus}
@@ -520,7 +1311,8 @@ de$omnibus %>%
   datatable(rownames = FALSE, filter = "top",
             caption = "Omnibus test results",
             options  = list(pageLength = 15, scrollX = TRUE,
-                            dom = "lBfrtip", buttons = list("csv", "excel")),
+                            dom = "lBfrtip",
+                            buttons = list("csv", "excel")),
             extensions = "Buttons") %>%
   formatStyle("pass",
               backgroundColor = styleEqual(c(TRUE, FALSE),
@@ -532,10 +1324,184 @@ de$omnibus %>%
 ```{r footer}
 HTML(paste0(
   '<div class="perseo-footer">',
-  'Generated by <strong>PERSEO</strong> v', pkg_version,
-  ' &nbsp;&bull;&nbsp; ', format(Sys.time(), "%Y-%m-%d %H:%M"),
-  ' &nbsp;&bull;&nbsp; <a href="https://github.com/OPSergio/Perseo"',
-  ' target="_blank">GitHub</a>',
+  '<div class="footer-brand">PERSEO v', pkg_version,
+  ' &mdash; GAMLSS-based Differential Expression for Omics</div>',
+  '<div class="footer-links">',
+  '<a href="https://github.com/OPSergio/Perseo" target="_blank">',
+  '&#128279; GitHub Repository</a>',
+  ' &bull; ',
+  '<a href="https://github.com/OPSergio/Perseo/issues" target="_blank">',
+  'Report Issue</a>',
+  ' &bull; ',
+  '<a href="https://github.com/OPSergio/Perseo/blob/main/README.md" target="_blank">',
+  'Documentation</a>',
+  '</div>',
+  '<div class="footer-meta">Report generated: ',
+  format(Sys.time(), "%Y-%m-%d %H:%M %Z"),
+  '</div>',
   '</div>'
 ))
+```
+
+```{r js-scripts, results='asis'}
+js <- '
+<script>
+(function () {
+  "use strict";
+
+  /* ---- Sidebar IntersectionObserver ---- */
+  window.addEventListener("load", function () {
+
+    var navLinks = document.querySelectorAll("#perseo-nav a");
+
+    var observed = [];
+    navLinks.forEach(function (link) {
+      var href = link.getAttribute("href");
+      if (href && href.startsWith("#")) {
+        var el = document.getElementById(href.substring(1));
+        if (el) observed.push({ link: link, el: el });
+      }
+    });
+
+    if (observed.length > 0 && "IntersectionObserver" in window) {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            navLinks.forEach(function (l) { l.classList.remove("active"); });
+            var id = entry.target.id;
+            var active = document.querySelector(
+              "#perseo-nav a[href=\"#" + id + "\"]");
+            if (active) active.classList.add("active");
+          }
+        });
+      }, { rootMargin: "-10% 0px -65% 0px", threshold: 0 });
+
+      observed.forEach(function (item) { io.observe(item.el); });
+    }
+
+    /* ---- Volcano threshold sliders ---- */
+    var COLOURS = {
+      sig_lfc : "#C0392B",
+      fdr_only: "#F4A460",
+      lfc_only: "#4E9FD4",
+      not_sig : "#AAAAAA"
+    };
+
+    function classify(estimate, pAdj, fdr, lfc) {
+      if (estimate === null || pAdj === null ||
+          estimate === undefined || pAdj === undefined) return "not_sig";
+      var al = Math.abs(estimate);
+      if (pAdj < fdr && al >= lfc) return "sig_lfc";
+      if (pAdj < fdr)              return "fdr_only";
+      if (al   >= lfc)             return "lfc_only";
+      return "not_sig";
+    }
+
+    function refreshVolcano(slug, fdr, lfc) {
+      var dataEl = document.getElementById("cdata-" + slug);
+      if (!dataEl) return 0;
+      var rows;
+      try { rows = JSON.parse(dataEl.textContent); } catch (e) { return 0; }
+
+      var map = {};
+      rows.forEach(function (r) { map[r.feature] = r; });
+
+      var sec = document.getElementById("csec-" + slug);
+      if (!sec) return 0;
+
+      /* ggiraph volcano: geom_point_interactive renders each point as an SVG
+         circle with data-id set and fill applied as an inline style (often
+         with !important) AND as an SVG attribute. We override both. */
+      var pts = sec.querySelectorAll("svg [data-id]");
+      if (pts.length === 0) pts = sec.querySelectorAll("[data-id]");
+      var count = 0;
+      pts.forEach(function (pt) {
+        var fid = pt.getAttribute("data-id");
+        var row = map[fid];
+        if (!row) return;
+        var cat = classify(row.estimate, row.p_adj, fdr, lfc);
+        var col = COLOURS[cat];
+        pt.setAttribute("fill",   col);
+        pt.setAttribute("stroke", col);
+        pt.style.setProperty("fill",   col, "important");
+        pt.style.setProperty("stroke", col, "important");
+        if (cat === "sig_lfc") count++;
+      });
+      return count;
+    }
+
+    function initControls() {
+      document.querySelectorAll(".volcano-controls").forEach(function (ctrl) {
+        var slug     = ctrl.id.replace("ctrl-", "");
+        var fdrSldr  = ctrl.querySelector(".fdr-slider");
+        var lfcSldr  = ctrl.querySelector(".lfc-slider");
+        var fdrDisp  = ctrl.querySelector(".fdr-val");
+        var lfcDisp  = ctrl.querySelector(".lfc-val");
+        var cntDisp  = ctrl.querySelector(".sig-count");
+
+        if (!fdrSldr || !lfcSldr) return;
+
+        function update() {
+          var fdr = parseFloat(fdrSldr.value);
+          var lfc = parseFloat(lfcSldr.value);
+          if (fdrDisp) fdrDisp.textContent = fdr.toFixed(3);
+          if (lfcDisp) lfcDisp.textContent = lfc.toFixed(1);
+          var n = refreshVolcano(slug, fdr, lfc);
+          if (cntDisp) cntDisp.textContent = n;
+        }
+
+        fdrSldr.addEventListener("input", update);
+        lfcSldr.addEventListener("input", update);
+        /* Initial paint after widget renders */
+        setTimeout(update, 800);
+      });
+    }
+
+    /* ggiraph widgets render asynchronously; wait a moment */
+    setTimeout(initControls, 600);
+
+    /* Re-apply slider classification when a tab is shown (ggiraph
+       sometimes re-paints point fills on layout change). */
+    if (window.jQuery) {
+      window.jQuery(document).on("shown.bs.tab", function () {
+        document.querySelectorAll(".volcano-controls").forEach(function (ctrl) {
+          var slug = ctrl.id.replace("ctrl-", "");
+          var fdr  = parseFloat(ctrl.querySelector(".fdr-slider").value);
+          var lfc  = parseFloat(ctrl.querySelector(".lfc-slider").value);
+          refreshVolcano(slug, fdr, lfc);
+        });
+      });
+    }
+
+    /* Sidebar -> tabset bridge: clicking a sidebar link that targets a
+       bootstrap tab pane should activate that tab. */
+    navLinks.forEach(function (link) {
+      var href = link.getAttribute("href");
+      if (!href || href.charAt(0) !== "#") return;
+      var id = href.substring(1);
+      var target = document.getElementById(id);
+      if (!target) return;
+      var isTabPane =
+        (target.className || "").indexOf("section") !== -1 &&
+        (target.closest && target.closest(".tabset"));
+      if (!isTabPane) return;
+      link.addEventListener("click", function (ev) {
+        var tabLink = document.querySelector(
+          \'ul.nav-pills a[href="#\' + id + \'"], \' +
+          \'ul.nav-tabs a[href="#\' + id + \'"]\');
+        if (tabLink) {
+          ev.preventDefault();
+          if (window.jQuery) window.jQuery(tabLink).tab("show");
+          else tabLink.click();
+          setTimeout(function () {
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 50);
+        }
+      });
+    });
+  });
+}());
+</script>
+'
+cat(js, "\n")
 ```

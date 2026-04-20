@@ -44,8 +44,10 @@ Suggests:
     ggiraph (>= 0.8.0),
     DT (>= 0.28),
     htmltools (>= 0.5.0),
-    jsonlite,
-    ggrepel
+    jsonlite (>= 1.8.0),
+    ggrepel,
+    ggVennDiagram (>= 1.2.0),
+    UpSetR (>= 1.4.0)
 RoxygenNote: 7.3.3
 VignetteBuilder: knitr
 URL: https://github.com/OPSergio/Perseo

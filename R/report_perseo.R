@@ -38,7 +38,7 @@ report_perseo <- function(x,
                           open        = TRUE,
                           quiet       = FALSE) {
 
-  for (pkg in c("rmarkdown", "ggiraph", "DT", "htmltools")) {
+  for (pkg in c("rmarkdown", "DT", "htmltools", "jsonlite")) {
     if (!requireNamespace(pkg, quietly = TRUE)) {
       stop("Package '", pkg, "' is required for report_perseo(). ",
            "Install it with: install.packages('", pkg, "')")

@@ -16,10 +16,9 @@ knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
                       fig.align = "center")
 
 library(htmltools)
-library(ggiraph)
-library(ggplot2)
 library(DT)
 library(dplyr)
+library(jsonlite)
 
 result <- params$result
 de     <- result$differential_expression
@@ -84,7 +83,6 @@ contrast_names <- if (has_contrasts) unique(contrasts_df$contrast) else characte
 contrast_slugs <- gsub("[^A-Za-z0-9]", "-", contrast_names)
 
 show_comparison <- has_contrasts && length(contrast_names) >= 2
-omnibus_sec_num <- if (show_comparison) 6L else 5L
 
 has_jsonlite <- requireNamespace("jsonlite", quietly = TRUE)
 
@@ -247,7 +245,7 @@ nav_links <- c(
   '<a href="#s0">0 &mdash; Parameters</a>',
   '<a href="#s1">1 &mdash; Summary</a>',
   '<a href="#s2">2 &mdash; Family Selection</a>',
-  '<a href="#s3">3 &mdash; All Results</a>',
+  '<a href="#s3">3 &mdash; Differential Expression</a>',
   '<a href="#s4">4 &mdash; Contrasts</a>'
 )
 for (i in seq_along(contrast_names)) {
@@ -261,10 +259,6 @@ for (i in seq_along(contrast_names)) {
 }
 if (show_comparison)
   nav_links <- c(nav_links, '<a href="#s5">5 &mdash; Comparison</a>')
-if (has_omnibus)
-  nav_links <- c(nav_links,
-    sprintf('<a href="#s%d">%d &mdash; Omnibus Test</a>',
-            omnibus_sec_num, omnibus_sec_num))
 
 sidebar_html <- paste0(
   '<nav class="perseo-sidenav" id="perseo-nav">',
@@ -276,93 +270,33 @@ sidebar_html <- paste0(
 # ---- Plot helpers ----------------------------------------------------------
 
 .perseo_colours <- c(
-  "Not sig"  = "#AAAAAA",
-  "LFC only" = "#4E9FD4",
-  "FDR only" = "#F4A460",
-  "Sig & LFC" = "#C0392B"
+  not_sig  = "#AAAAAA",
+  lfc_only = "#4E9FD4",
+  fdr_only = "#F4A460",
+  sig_lfc  = "#C0392B"
 )
 
-theme_rmd <- function(base_size = 11) {
-  ggplot2::theme_minimal(base_size = base_size) +
-    ggplot2::theme(
-      panel.grid.minor = ggplot2::element_blank(),
-      panel.border     = ggplot2::element_rect(colour = "#CCCCCC", fill = NA,
-                                               linewidth = 0.4),
-      strip.background = ggplot2::element_rect(fill = "#F5F5F5", colour = "#CCCCCC"),
-      legend.position  = "right",
-      plot.title       = ggplot2::element_text(face = "bold"),
-      axis.title       = ggplot2::element_text(face = "bold"),
-      plot.caption     = ggplot2::element_text(colour = "#888888", size = 8)
-    )
+classify_colour <- function(estimate, p_adj,
+                            fdr = .fdr_threshold,
+                            lfc = .lfc_threshold) {
+  out <- rep(unname(.perseo_colours["not_sig"]), length(estimate))
+  ok  <- is.finite(estimate) & is.finite(p_adj)
+  al  <- abs(estimate)
+  out[ok & p_adj <  fdr & al >= lfc] <- unname(.perseo_colours["sig_lfc"])
+  out[ok & p_adj <  fdr & al <  lfc] <- unname(.perseo_colours["fdr_only"])
+  out[ok & p_adj >= fdr & al >= lfc] <- unname(.perseo_colours["lfc_only"])
+  out
 }
 
-make_volcano <- function(df_c, fdr = .fdr_threshold, lfc = .lfc_threshold) {
-  df_c$neg_log10 <- -log10(pmax(df_c$p_adj, 1e-300))
-  df_c$sig_cat   <- dplyr::case_when(
-    !is.finite(df_c$estimate) | !is.finite(df_c$p_adj) ~ "Not sig",
-    df_c$p_adj < fdr & abs(df_c$estimate) >= lfc        ~ "Sig & LFC",
-    df_c$p_adj < fdr                                    ~ "FDR only",
-    abs(df_c$estimate) >= lfc                           ~ "LFC only",
-    TRUE                                                ~ "Not sig"
-  )
-  df_c$sig_cat <- factor(df_c$sig_cat,
-    levels = c("Not sig", "LFC only", "FDR only", "Sig & LFC"))
-  df_c$tooltip <- paste0(
-    "<b>", df_c$feature, "</b><br/>",
-    "LFC: ", round(df_c$estimate, 3), "<br/>",
-    "p-adj: ", signif(df_c$p_adj, 3))
-  df_c$data_id <- df_c$feature
-  ggplot2::ggplot(df_c,
-    ggplot2::aes(x = estimate, y = neg_log10,
-                 colour = sig_cat, tooltip = tooltip, data_id = data_id)) +
-    ggiraph::geom_point_interactive(size = 1.6, alpha = 0.7, na.rm = TRUE) +
-    ggplot2::geom_vline(xintercept = c(-lfc, lfc),
-      linetype = "dashed", colour = "#555555", linewidth = 0.4) +
-    ggplot2::geom_hline(yintercept = -log10(fdr),
-      linetype = "dashed", colour = "#555555", linewidth = 0.4) +
-    ggplot2::scale_colour_manual(values = .perseo_colours, name = NULL,
-                                 drop = FALSE) +
-    ggplot2::labs(
-      x = "Log Fold Change (link scale)",
-      y = expression(-log[10](p[adj])),
-      caption = paste0("Initial thresholds: FDR = ", fdr, " | |LFC| = ", lfc,
-                       " \u2014 use sliders below to update point colours")) +
-    theme_rmd()
-}
-
-make_ma <- function(df_c, fdr = .fdr_threshold) {
-  df_c$sig    <- !is.na(df_c$p_adj) & df_c$p_adj < fdr
-  df_c$a_axis <- if ("mean_expr" %in% names(df_c)) df_c$mean_expr else
-                   rank(-abs(df_c$estimate), ties.method = "first")
-  df_c$tooltip <- paste0(
-    "<b>", df_c$feature, "</b><br/>",
-    "LFC: ", round(df_c$estimate, 3), "<br/>",
-    "p-adj: ", signif(df_c$p_adj, 3))
-  df_c$data_id <- df_c$feature
-  ggplot2::ggplot(df_c,
-    ggplot2::aes(x = a_axis, y = estimate, colour = sig,
-                 tooltip = tooltip, data_id = data_id)) +
-    ggiraph::geom_point_interactive(size = 1.6, alpha = 0.7, na.rm = TRUE) +
-    ggplot2::geom_hline(yintercept = 0, colour = "#333333", linewidth = 0.5) +
-    ggplot2::scale_colour_manual(
-      values = c("TRUE" = "#C0392B", "FALSE" = "#AAAAAA"),
-      labels = c("TRUE" = paste0("FDR\u00a0<\u00a0", fdr), "FALSE" = "Not sig"),
-      name   = NULL) +
-    ggplot2::labs(
-      x = "Feature rank by |LFC| (or mean expression)",
-      y = "Log Fold Change (link scale)",
-      caption = paste0("MA-plot: A-axis = expression level / rank; M-axis = LFC")) +
-    theme_rmd()
-}
-
-as_girafe <- function(gg, w = 7, h = 4.5) {
-  ggiraph::girafe(ggobj = gg, width_svg = w, height_svg = h,
-    options = list(
-      ggiraph::opts_hover(css = "opacity:1;"),
-      ggiraph::opts_tooltip(
-        css = paste0("background:white;border:1px solid #ccc;padding:6px 8px;",
-                     "border-radius:4px;font-size:12px;font-family:sans-serif;")),
-      ggiraph::opts_sizing(rescale = TRUE)))
+emit_chart <- function(id, type, payload, min_h = "360px",
+                       extra_class = "") {
+  json <- jsonlite::toJSON(payload, dataframe = "rows",
+                           na = "null", auto_unbox = TRUE)
+  htmltools::HTML(sprintf(paste0(
+    '<div id="%s" class="perseo-chart %s" data-chart-type="%s" ',
+    'style="width:100%%;min-height:%s;"></div>\n',
+    '<script type="application/json" id="cfg-%s">%s</script>\n'),
+    id, extra_class, type, min_h, id, json))
 }
 ```
 
@@ -407,12 +341,12 @@ h1.title { display:none; }
 
 /* ---- Header ---- */
 .perseo-header {
-  display:flex; align-items:center; gap:20px;
-  padding:20px 0 16px 0; border-bottom:3px solid #2C3E50; margin-bottom:20px;
+  display:flex; align-items:center; gap:28px;
+  padding:22px 0 18px 0; border-bottom:3px solid #2C3E50; margin-bottom:22px;
 }
-.perseo-logo   { height:72px; width:auto; flex-shrink:0; }
+.perseo-logo   { height:104px; width:auto; flex-shrink:0; }
 .perseo-report-title {
-  margin:0 0 4px 0 !important; font-size:1.7em !important;
+  margin:0 0 4px 0 !important; font-size:1.9em !important;
   font-weight:700 !important; color:#2C3E50 !important;
   border:none !important; padding:0 !important;
 }
@@ -519,8 +453,14 @@ h2 { color:#34495E; margin-top:28px; }
 h3 { color:#34495E; border-left:4px solid #3498db;
      padding-left:10px; margin-top:28px; }
 
-/* ---- ggiraph ---- */
-.girafe_container_std { margin:12px auto; }
+/* ---- ECharts chart containers ---- */
+.perseo-chart { margin:14px 0 20px 0; }
+.perseo-chart.chart-tall { min-height:520px; }
+.perseo-chart.chart-wide { min-height:420px; }
+.chart-empty {
+  padding:20px; border:1px dashed #ccc; border-radius:6px;
+  background:#fafafa; color:#888; font-style:italic; text-align:center;
+}
 
 /* ---- DataTables ---- */
 .dataTables_wrapper .dataTables_filter input {
@@ -531,6 +471,23 @@ h3 { color:#34495E; border-left:4px solid #3498db;
 .sec-anchor { display:block; height:0; overflow:hidden; }
 "
 cat("<style>", css, "</style>\n")
+```
+
+```{r embed-echarts, results='asis'}
+# Inline the ECharts bundle so the HTML stays self-contained.
+ecdir <- system.file("templates", "assets", "echarts.min.js",
+                     package = "PERSEO")
+if (!nzchar(ecdir) || !file.exists(ecdir)) {
+  ecdir <- file.path(dirname(knitr::current_input(dir = TRUE)),
+                     "assets", "echarts.min.js")
+}
+if (file.exists(ecdir)) {
+  ec <- paste(readLines(ecdir, warn = FALSE, encoding = "UTF-8"),
+              collapse = "\n")
+  cat("<script>", ec, "</script>\n", sep = "")
+} else {
+  cat("<script src=\"https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js\"></script>\n")
+}
 ```
 
 ```{r emit-sidebar, results='asis'}
@@ -733,52 +690,77 @@ cat(info_box(
 ))
 ```
 
-```{r family-barplot, fig.height=4}
+```{r family-barplot}
 sel_df <- de$selection
+# Shared palette for families — same order used by IC histogram.
+.fam_palette <- c("#2C6E9B","#C0392B","#27AE60","#E67E22","#8E44AD",
+                  "#16A085","#D4AC0D","#34495E","#7F8C8D","#2E86C1",
+                  "#6C5CE7","#E17055","#00B894","#FDCB6E","#0984E3")
+.fam_colour_map <- local({
+  all_fams <- if (!is.null(sel_df) && "best_family" %in% names(sel_df))
+    sort(unique(sel_df$best_family)) else character(0)
+  setNames(.fam_palette[(seq_along(all_fams) - 1L) %% length(.fam_palette) + 1L],
+           all_fams)
+})
+
 if (!is.null(sel_df) && nrow(sel_df) > 0 && "best_family" %in% names(sel_df)) {
   fi_lookup <- vapply(names(.family_info), function(k) .family_info[[k]]$full,
                       character(1))
   fam_counts <- sel_df %>%
-    count(Family = best_family, name = "n") %>%
+    count(family = best_family, name = "n") %>%
     arrange(desc(n)) %>%
     mutate(
-      pct     = n / sum(n) * 100,
-      full    = fi_lookup[Family],
-      tooltip = paste0("<b>", Family, "</b>",
-                       ifelse(!is.na(full), paste0("<br/><em>", full, "</em>"), ""),
-                       "<br/>n\u00a0=\u00a0", n, " (", round(pct, 1), "%)"),
-      data_id = Family)
+      pct    = round(n / sum(n) * 100, 1),
+      full   = unname(fi_lookup[family]),
+      colour = unname(.fam_colour_map[family])
+    )
 
-  gg <- ggplot2::ggplot(fam_counts,
-      ggplot2::aes(x = reorder(Family, n), y = n, fill = Family,
-                   tooltip = tooltip, data_id = data_id)) +
-    ggiraph::geom_col_interactive(width = 0.7, show.legend = FALSE) +
-    ggplot2::coord_flip() +
-    ggplot2::scale_fill_viridis_d(option = "D", begin = 0.2, end = 0.85) +
-    ggplot2::labs(x = NULL, y = "Number of features",
-                  title = "Best-fitting GAMLSS family per feature") +
-    theme_rmd()
-
-  as_girafe(gg, w = 7, h = max(3, 0.4 * nrow(fam_counts) + 1))
+  emit_chart("chart-family-bar", "family_bar",
+             list(rows = fam_counts),
+             min_h = paste0(max(300, 32 * nrow(fam_counts) + 60), "px"),
+             extra_class = "chart-wide")
 }
 ```
 
-```{r ic-histogram}
+```{r ic-histogram, results='asis'}
 if (!is.null(sel_df) && nrow(sel_df) > 0 &&
     "ic_value" %in% names(sel_df) && "best_family" %in% names(sel_df)) {
   ic_finite <- sel_df[is.finite(sel_df$ic_value), ]
   if (nrow(ic_finite) > 10) {
-    gg_ic <- ggplot2::ggplot(ic_finite,
-        ggplot2::aes(x = ic_value, fill = best_family)) +
-      ggplot2::geom_histogram(bins = 60, alpha = 0.85, colour = "white") +
-      ggplot2::scale_fill_viridis_d(option = "D", begin = 0.2, end = 0.85,
-                                     name = "Family") +
-      ggplot2::labs(x = "Jacobian-corrected IC (best model per feature)",
-                    y = "Number of features",
-                    caption = paste0("Lower IC = better model fit. ",
-                      "Features with very high IC may have poor model fit.")) +
-      theme_rmd()
-    print(gg_ic)
+    cat(info_box(
+      "How to read the IC histogram",
+      paste0(
+        "<p>Each bar shows how many features had a given ",
+        "information criterion (IC &mdash; BIC or AIC depending on ",
+        "<code>criterion</code>) for their <em>best-fitting</em> family. ",
+        "A tight, left-skewed distribution means most models fit well. ",
+        "A long right tail or multi-modal shape indicates a heterogeneous ",
+        "dataset where different feature blocks require very different models.</p>",
+        "<p>Colours match the family bar chart above: each family is stacked in the ",
+        "same colour, so you can see which families dominate at low IC (good fit) ",
+        "versus high IC (poor fit). <strong>Low IC = better fit</strong>; the ",
+        "Jacobian correction ensures IC values are comparable across families ",
+        "even when transformations are applied.</p>"
+      )
+    ))
+
+    rng <- range(ic_finite$ic_value)
+    nbins <- 40
+    breaks <- seq(rng[1], rng[2], length.out = nbins + 1)
+    mids   <- (head(breaks, -1) + tail(breaks, -1)) / 2
+    families <- sort(unique(ic_finite$best_family))
+    series <- lapply(families, function(f) {
+      vv  <- ic_finite$ic_value[ic_finite$best_family == f]
+      cnt <- as.integer(table(cut(vv, breaks = breaks,
+                                  include.lowest = TRUE)))
+      list(name   = f,
+           colour = unname(.fam_colour_map[f]),
+           counts = cnt)
+    })
+    emit_chart("chart-ic-hist", "ic_hist",
+               list(bin_mids = signif(mids, 5),
+                    series   = series),
+               min_h = "360px", extra_class = "chart-wide")
   }
 }
 ```
@@ -833,7 +815,7 @@ if (!is.null(sel_df) && nrow(sel_df) > 0 && "best_family" %in% names(sel_df)) {
 
 <div id="s3" class="sec-anchor"></div>
 
-# 3 &mdash; All Contrasts
+# 3 &mdash; Differential Expression
 
 > **Complete pairwise contrast table** &mdash; every feature &times; every contrast,
 > searchable, filterable, and downloadable as CSV or Excel. This is the single source
@@ -892,6 +874,46 @@ cat(info_box(
     "in section 0.</p>"
   )
 ))
+```
+
+```{r s3-omnibus-infobox, results='asis', eval=has_omnibus}
+cat(info_box(
+  "Omnibus Test &mdash; global significance per feature",
+  paste0(
+    "<p>The <strong>omnibus test</strong> evaluates whether the contrast variable has ",
+    "<em>any</em> effect on a feature, jointly across all levels, before any pairwise ",
+    "contrast is computed.</p>",
+    "<ul>",
+    "<li><strong>Wald omnibus</strong>: W&nbsp;=&nbsp;&beta;'V<sup>&minus;1</sup>&beta;&nbsp;~&nbsp;&chi;<sup>2</sup>(df). ",
+    "Fast, no refit. Large-sample asymptotics.</li>",
+    "<li><strong>LRT</strong>: compares full vs. reduced model. More robust for small ",
+    "samples but requires a second fit per feature.</li>",
+    "</ul>",
+    "<p>Acts as a <strong>gatekeeper</strong>: only features with ",
+    "p&nbsp;&lt;&nbsp;omnibus_threshold proceed to pairwise contrast computation. ",
+    "Features with <code>pass\u00a0=\u00a0FALSE</code> are excluded from the contrast table below.</p>"
+  )
+))
+```
+
+```{r s3-omnibus-table, eval=has_omnibus}
+de$omnibus %>%
+  mutate(statistic = round(statistic, 3), p_value = signif(p_value, 3)) %>%
+  datatable(rownames = FALSE, filter = "top",
+            caption = htmltools::tags$caption(
+              style = "caption-side: top; text-align: left; font-weight:600;",
+              "Omnibus results \u2014 global test per feature"),
+            options  = list(pageLength = 10, scrollX = TRUE,
+                            dom = "lBfrtip",
+                            buttons = list(
+                              list(extend = "csv",   filename = "perseo_omnibus",
+                                   text   = '<span>&#x2B07; CSV</span>'),
+                              list(extend = "excel", filename = "perseo_omnibus",
+                                   text   = '<span>&#x2B07; Excel</span>'))),
+            extensions = "Buttons") %>%
+  formatStyle("pass",
+              backgroundColor = styleEqual(c(TRUE, FALSE),
+                                           c("#d4edda", "#f8d7da")))
 ```
 
 ```{r contrasts-table}
@@ -995,11 +1017,9 @@ cat(info_box(
     "features cluster at one end of the X axis, effect size depends on expression level ",
     "(a signal of model miscalibration or mean-variance issues).</p>",
 
-    "<p><strong>QQ plot (p-value)</strong> &mdash; observed &minus;log<sub>10</sub>(p) vs. ",
-    "expected under a uniform null. Points on the diagonal &rArr; well-calibrated null. ",
-    "Deviation above the diagonal in the right tail &rArr; true differential features. ",
-    "A systematic lift across <em>all</em> p-values (not only the tail) suggests inflation ",
-    "and potential model misspecification.</p>",
+    "<p><strong>Boxplot (top 20 hits)</strong> &mdash; distribution of the raw signal ",
+    "for the 20 most significant features in this contrast, grouped by the two contrasted ",
+    "levels. Useful to eyeball effect size, variance, and outliers behind each LFC value.</p>",
 
     "<p><strong>Top 20 hits</strong> &mdash; the 20 features with the smallest adjusted ",
     "p-value for this contrast. The full table is in section 3.</p>"
@@ -1008,6 +1028,20 @@ cat(info_box(
 ```
 
 ```{r contrast-sections, results='asis', eval=has_contrasts}
+# Helper to compute a 5-number summary + outliers for ECharts boxplot.
+.box_stats <- function(v) {
+  v <- v[is.finite(v)]
+  if (length(v) < 1) return(list(box = rep(NA_real_, 5), outliers = numeric(0)))
+  q <- stats::quantile(v, c(0, .25, .5, .75, 1), names = FALSE)
+  iqr <- q[4] - q[2]
+  out <- v[v < q[2] - 1.5 * iqr | v > q[4] + 1.5 * iqr]
+  list(box = unname(q), outliers = unname(out))
+}
+
+.raw_counts <- if (!is.null(result$input_data)) result$input_data$counts_matrix else NULL
+.raw_meta   <- if (!is.null(result$input_data)) result$input_data$metadata else NULL
+.raw_cvar   <- if (!is.null(result$input_data)) result$input_data$contrast_variable else NULL
+
 for (i in seq_along(contrast_names)) {
   cname <- contrast_names[i]
   slug  <- contrast_slugs[i]
@@ -1017,98 +1051,129 @@ for (i in seq_along(contrast_names)) {
     df_c <- merge(df_c, de$selection[, c("feature", "best_family")],
                   by = "feature", all.x = TRUE)
 
-  # Count using the same thresholds as KPIs
   n_sig_c <- sum(!is.na(df_c$p_adj) &
                    df_c$p_adj < .fdr_threshold &
                    abs(df_c$estimate) >= .lfc_threshold,
                  na.rm = TRUE)
 
-  # Tab header (##) — rendered as a pill tab by the parent {.tabset}.
   cat(sprintf('\n## %s {#c-%s}\n\n', cname, slug))
   cat(sprintf('<div id="csec-%s">\n\n', slug))
   cat(sprintf(
     "<p><strong>%d significant features</strong> (FDR&nbsp;&lt;&nbsp;%.3f &amp; |LFC|&nbsp;&ge;&nbsp;%.1f) out of %d tested.</p>\n\n",
     n_sig_c, .fdr_threshold, .lfc_threshold, nrow(df_c)))
 
-  # Embed JSON data for JS sliders
-  if (has_jsonlite) {
-    json_cols <- intersect(c("feature", "estimate", "p_adj"), names(df_c))
-    json_data <- jsonlite::toJSON(df_c[, json_cols, drop = FALSE],
-                                  dataframe = "rows", na = "null")
-    cat(sprintf('<script id="cdata-%s" type="application/json">%s</script>\n\n',
-                slug, json_data))
+  # -------- Volcano (ECharts) --------
+  cat("### Volcano plot\n\n")
+  volc_rows <- data.frame(
+    feature   = df_c$feature,
+    estimate  = df_c$estimate,
+    p_adj     = df_c$p_adj,
+    neg_log10 = ifelse(is.finite(df_c$p_adj) & df_c$p_adj > 0,
+                       -log10(df_c$p_adj), NA_real_),
+    colour    = classify_colour(df_c$estimate, df_c$p_adj),
+    stringsAsFactors = FALSE
+  )
+  volc_payload <- list(
+    rows      = volc_rows,
+    fdr       = .fdr_threshold,
+    lfc       = .lfc_threshold,
+    slug      = slug
+  )
+  print(emit_chart(sprintf("volcano-%s", slug), "volcano", volc_payload,
+                   min_h = "460px", extra_class = "chart-tall"))
+  cat("\n\n")
+
+  cat(sprintf(
+    paste0('<div class="volcano-controls" id="ctrl-%s" data-chart="volcano-%s">\n',
+           '  <div class="vc-group"><label>FDR threshold:&nbsp;',
+           '<span class="vc-val fdr-val">%.3f</span></label>',
+           '<input type="range" class="fdr-slider" min="0.001" max="0.25" step="0.005" value="%.3f"></div>\n',
+           '  <div class="vc-group"><label>|LFC| min:&nbsp;',
+           '<span class="vc-val lfc-val">%.1f</span></label>',
+           '<input type="range" class="lfc-slider" min="0" max="5" step="0.1" value="%.1f"></div>\n',
+           '  <div class="vc-summary">Sig &amp; LFC:&nbsp;<strong class="sig-count">%d</strong></div>\n',
+           '  <span class="vc-note">Points recolour live; dashed reference lines follow the sliders.</span>\n',
+           '</div>\n\n'),
+    slug, slug,
+    .fdr_threshold, .fdr_threshold,
+    .lfc_threshold, .lfc_threshold,
+    n_sig_c))
+
+  # -------- MA plot (ECharts) --------
+  cat("### MA plot\n\n")
+  ma_rows <- df_c
+  base_mean_col <- intersect(c("base_mean", "mean_expr", "mean"), names(ma_rows))[1]
+  if (is.na(base_mean_col)) {
+    if (!is.null(.raw_counts)) {
+      bm <- rowMeans(.raw_counts[match(ma_rows$feature, rownames(.raw_counts)), ,
+                                 drop = FALSE], na.rm = TRUE)
+      ma_rows$base_mean <- log2(pmax(bm, 1e-6))
+    } else {
+      ma_rows$base_mean <- rank(ma_rows$feature) / length(ma_rows$feature)
+    }
+    base_mean_col <- "base_mean"
   }
+  ma_payload <- list(
+    rows = data.frame(
+      feature  = ma_rows$feature,
+      x        = ma_rows[[base_mean_col]],
+      estimate = ma_rows$estimate,
+      p_adj    = ma_rows$p_adj,
+      colour   = classify_colour(ma_rows$estimate, ma_rows$p_adj),
+      stringsAsFactors = FALSE
+    ),
+    lfc = .lfc_threshold,
+    xlab = if (base_mean_col == "base_mean") "log2 mean expression" else base_mean_col
+  )
+  print(emit_chart(sprintf("ma-%s", slug), "ma", ma_payload,
+                   min_h = "380px"))
+  cat("\n\n")
 
-  # --- Volcano plot ---
-  tryCatch({
-    cat("### Volcano plot\n\n")
-    print(tagList(as_girafe(make_volcano(df_c))))
-    cat("\n\n")
+  # -------- Boxplot (ECharts) --------
+  cat("### Boxplot (top 20 hits)\n\n")
+  if (!is.null(.raw_counts) && !is.null(.raw_meta) && !is.null(.raw_cvar)) {
+    # Contrast names may use "_vs_" (from build_contrast_matrix) or " vs "
+    cname_norm <- gsub("_vs_", " vs ", cname)
+    parts <- strsplit(cname_norm, "\\s+vs\\s+")[[1]]
+    if (length(parts) == 2 && .raw_cvar %in% names(.raw_meta)) {
+      gB <- parts[1]; gA <- parts[2]
+      grp_vec <- as.character(.raw_meta[[.raw_cvar]])
+      sA <- which(grp_vec == gA); sB <- which(grp_vec == gB)
 
-    # Slider controls
-    if (has_jsonlite) {
-      cat(sprintf(
-        '<div class="volcano-controls" id="ctrl-%s">\n',
-        slug))
-      cat(sprintf(
-        '  <div class="vc-group"><label>FDR threshold:&nbsp;
-           <span class="vc-val fdr-val">%.3f</span></label>
-           <input type="range" class="fdr-slider" min="0.001" max="0.25"
-                  step="0.005" value="%.3f"></div>\n',
-        .fdr_threshold, .fdr_threshold))
-      cat(sprintf(
-        '  <div class="vc-group"><label>|LFC| min:&nbsp;
-           <span class="vc-val lfc-val">%.1f</span></label>
-           <input type="range" class="lfc-slider" min="0" max="5"
-                  step="0.1" value="%.1f"></div>\n',
-        .lfc_threshold, .lfc_threshold))
-      cat('  <div class="vc-summary">Sig &amp; LFC:&nbsp;<strong class="sig-count">&hellip;</strong></div>\n')
-      cat('  <span class="vc-note">Dashed reference lines stay fixed; point colours update live.</span>\n')
-      cat('</div>\n\n')
-    }
-  }, error = function(e) {
-    cat(sprintf("> *Volcano plot could not be rendered: %s*\n\n", conditionMessage(e)))
-  })
+      top_feats <- df_c$feature[order(df_c$p_adj, na.last = NA)]
+      top_feats <- head(intersect(top_feats, rownames(.raw_counts)), 20)
 
-  # --- MA plot ---
-  tryCatch({
-    cat("### MA plot\n\n")
-    print(tagList(as_girafe(make_ma(df_c))))
-    cat("\n\n")
-  }, error = function(e) {
-    cat(sprintf("> *MA plot could not be rendered: %s*\n\n", conditionMessage(e)))
-  })
-
-  # --- QQ plot of p-values ---
-  tryCatch({
-    pv_col_c <- intersect(c("p_value", "pval"), names(df_c))[1]
-    if (!is.na(pv_col_c)) {
-      pv_vals <- df_c[[pv_col_c]]
-      pv_vals <- pv_vals[is.finite(pv_vals) & pv_vals > 0 & pv_vals <= 1]
-      n_pv <- length(pv_vals)
-      if (n_pv >= 5) {
-        cat("### P-value QQ plot\n\n")
-        obs  <- -log10(sort(pv_vals))
-        expn <- -log10(ppoints(n_pv))
-        df_qq <- data.frame(expected = expn, observed = obs)
-        lim <- max(df_qq$expected, df_qq$observed, na.rm = TRUE)
-        gg_qq <- ggplot2::ggplot(df_qq,
-            ggplot2::aes(x = expected, y = observed)) +
-          ggplot2::geom_abline(slope = 1, intercept = 0,
-                               colour = "#C0392B", linetype = "dashed") +
-          ggplot2::geom_point(size = 1.4, alpha = 0.7, colour = "#2C3E50") +
-          ggplot2::coord_equal(xlim = c(0, lim), ylim = c(0, lim)) +
-          ggplot2::labs(
-            x = expression(Expected~-log[10](p)),
-            y = expression(Observed~-log[10](p)),
-            caption = paste0("Diagonal = uniform null. Right-tail lift = true signal. ",
-                             "Global lift = potential inflation.")) +
-          theme_rmd()
-        print(gg_qq)
+      if (length(top_feats) > 0 && length(sA) > 0 && length(sB) > 0) {
+        box_A <- lapply(top_feats, function(f) .box_stats(.raw_counts[f, sA]))
+        box_B <- lapply(top_feats, function(f) .box_stats(.raw_counts[f, sB]))
+        out_A <- do.call(rbind, lapply(seq_along(top_feats), function(k) {
+          o <- box_A[[k]]$outliers
+          if (length(o)) data.frame(feat = k - 1, value = o) else NULL
+        }))
+        out_B <- do.call(rbind, lapply(seq_along(top_feats), function(k) {
+          o <- box_B[[k]]$outliers
+          if (length(o)) data.frame(feat = k - 1, value = o) else NULL
+        }))
+        box_payload <- list(
+          features = top_feats,
+          groupA   = gA, groupB = gB,
+          boxA     = lapply(box_A, function(b) b$box),
+          boxB     = lapply(box_B, function(b) b$box),
+          outA     = if (is.null(out_A)) list() else out_A,
+          outB     = if (is.null(out_B)) list() else out_B
+        )
+        print(emit_chart(sprintf("box-%s", slug), "boxplot", box_payload,
+                         min_h = "400px", extra_class = "chart-wide"))
         cat("\n\n")
+      } else {
+        cat("> *Not enough samples or features to render a boxplot for this contrast.*\n\n")
       }
+    } else {
+      cat("> *Contrast name could not be parsed as `B vs A` \u2014 boxplot skipped.*\n\n")
     }
-  }, error = function(e) {})
+  } else {
+    cat("> *Raw data not available on this result object. Re-run `run_perseo()` to enable boxplots.*\n\n")
+  }
 
   # --- Top 20 hits table (preview) ---
   tryCatch({
@@ -1158,12 +1223,14 @@ cat(paste0(
 cat("<div id=\"s5\" class=\"sec-anchor\"></div>\n\n")
 cat("# 5 &mdash; Contrast Comparison\n\n")
 cat(paste0("> **Cross-contrast comparison of significant features.** ",
-           "The Venn / UpSet diagram shows feature overlap across contrasts ",
-           "(using FDR < ", .fdr_threshold, " and |LFC| \u2265 ", .lfc_threshold, "). ",
-           "The heatmap shows LFC for the top 40 features across all contrasts.\n\n"))
+           "The Venn / UpSet diagram shows which features are significant in one, ",
+           "several, or all contrasts (FDR < ", .fdr_threshold,
+           " and |LFC| \u2265 ", .lfc_threshold, "). ",
+           "For \u22644 contrasts a classic Venn diagram is drawn; ",
+           "for more contrasts an UpSet bar/dot-matrix chart is used.\n\n"))
 ```
 
-```{r venn-upset, eval=show_comparison}
+```{r venn-upset, results='asis', eval=show_comparison}
 sig_sets <- lapply(setNames(nm = contrast_names), function(cn) {
   dfc <- contrasts_df[contrasts_df$contrast == cn, ]
   unique(dfc$feature[!is.na(dfc$p_adj) & dfc$p_adj < .fdr_threshold &
@@ -1171,155 +1238,69 @@ sig_sets <- lapply(setNames(nm = contrast_names), function(cn) {
 })
 
 n_c <- length(contrast_names)
-has_venn  <- requireNamespace("ggVennDiagram", quietly = TRUE)
-has_upset <- requireNamespace("UpSetR",        quietly = TRUE)
+all_feats <- unique(unlist(sig_sets))
 
-use_venn  <- n_c >= 2 && n_c <= 4 && has_venn
-use_upset <- !use_venn && n_c >= 2 && n_c <= 8 && has_upset
+if (n_c >= 2 && length(all_feats) > 0) {
+  # Compute membership matrix: features x sets
+  mem <- vapply(sig_sets, function(s) all_feats %in% s, logical(length(all_feats)))
 
-if (use_venn) {
-  tryCatch({
-    venn_sets <- sig_sets[vapply(sig_sets, length, integer(1)) > 0]
-    if (length(venn_sets) >= 2) {
-      vp <- ggVennDiagram::ggVennDiagram(venn_sets, label_alpha = 0,
-                                          set_size = 3.5) +
-        ggplot2::scale_fill_gradient(low = "#EBF5FB", high = "#2980B9",
-                                     name = "Features") +
-        ggplot2::scale_colour_manual(values = rep("#2C3E50", length(venn_sets))) +
-        ggplot2::labs(title = paste0("Significant feature overlap (",
-                                     n_c, " contrasts)"),
-                      caption = paste0("FDR\u00a0<\u00a0", .fdr_threshold,
-                                       " \u2229 |LFC|\u00a0\u2265\u00a0",
-                                       .lfc_threshold)) +
-        ggplot2::theme_void(base_size = 12) +
-        ggplot2::theme(plot.title = ggplot2::element_text(face = "bold",
-                                                          hjust = 0.5))
-      print(vp)
-    }
-  }, error = function(e) {
-    message("ggVennDiagram error: ", conditionMessage(e))
-  })
-} else if (n_c >= 2 && n_c <= 8 && requireNamespace("UpSetR", quietly = TRUE)) {
-  tryCatch({
-    all_feats <- unique(unlist(sig_sets))
-    if (length(all_feats) > 0) {
-      mem_mat <- as.data.frame(
-        vapply(sig_sets, function(s) as.integer(all_feats %in% s),
-               integer(length(all_feats)))
+  if (n_c <= 4) {
+    # Enumerate all 2^n_c - 1 exclusive regions
+    regions <- lapply(seq_len(2^n_c - 1), function(mask_int) {
+      mask <- as.logical(intToBits(mask_int)[seq_len(n_c)])
+      cnt <- if (length(all_feats) > 0)
+        sum(apply(mem, 1, function(m) identical(m, mask)))
+      else 0L
+      list(sets = which(mask) - 1L, size = cnt)
+    })
+    venn_payload <- list(
+      sets    = contrast_names,
+      sizes   = vapply(sig_sets, length, integer(1)),
+      regions = regions,
+      fdr     = .fdr_threshold,
+      lfc     = .lfc_threshold
+    )
+    emit_chart("chart-venn", "venn", venn_payload,
+               min_h = "420px", extra_class = "chart-wide")
+  } else {
+    # UpSet-style for >4 contrasts.
+    # paste(logical) → "TRUEFALSE..." so we must convert to 0/1 first.
+    int_patterns <- apply(mem, 1, function(m) paste(as.integer(m), collapse = ""))
+    unique_pats  <- unique(int_patterns)
+    upset_rows <- do.call(rbind, lapply(unique_pats, function(pat) {
+      bits <- as.logical(as.integer(strsplit(pat, "")[[1]]))
+      cnt  <- sum(int_patterns == pat)
+      data.frame(
+        pattern = pat,
+        count   = cnt,
+        n_sets  = sum(bits),
+        stringsAsFactors = FALSE
       )
-      row.names(mem_mat) <- all_feats
-      UpSetR::upset(mem_mat, order.by = "freq", point.size = 3.5,
-                    line.size  = 1.2, text.scale = 1.2,
-                    mainbar.y.label = "Feature intersections",
-                    sets.x.label    = paste0("Sig. features per contrast\n(FDR<",
-                                             .fdr_threshold, ", |LFC|\u2265",
-                                             .lfc_threshold, ")"))
-    }
-  }, error = function(e) {
-    message("UpSetR error: ", conditionMessage(e))
-  })
-} else if (n_c > 8) {
-  cat(paste0("> *Venn / UpSet diagram skipped: more than 8 contrasts (",
-             n_c, "). Use the heatmap and master table for cross-contrast exploration.*\n\n"))
-} else {
-  cat(paste0("> *Install `ggVennDiagram` (for \u22644 contrasts) or `UpSetR` ",
-             "(for 5\u20138 contrasts) to display the overlap diagram.*\n\n"))
+    }))
+    upset_rows <- upset_rows[upset_rows$count > 0, ]
+    upset_rows <- head(upset_rows[order(-upset_rows$count), ], 30L)
+
+    # Short labels for display (strip "Treatment" prefix to save space)
+    short_sets <- gsub("_vs_", " vs ", contrast_names)
+
+    upset_payload <- list(
+      sets   = short_sets,
+      rows   = upset_rows,
+      sizes  = vapply(sig_sets, length, integer(1)),
+      fdr    = .fdr_threshold,
+      lfc    = .lfc_threshold
+    )
+    h_dot  <- max(200L, n_c * 28L)
+    h_bar  <- 200L
+    emit_chart("chart-venn", "upset", upset_payload,
+               min_h = paste0(h_bar + h_dot + 120L, "px"),
+               extra_class = "chart-wide")
+  }
+} else if (n_c >= 2) {
+  cat("> *No significant features found at the current thresholds — Venn diagram empty.*\n\n")
 }
 ```
 
-```{r lfc-heatmap, eval=show_comparison}
-tryCatch({
-  min_p_per_feat <- tapply(contrasts_df$p_adj, contrasts_df$feature,
-                           function(x) min(x, na.rm = TRUE))
-  min_p_per_feat <- min_p_per_feat[is.finite(min_p_per_feat)]
-  top_feat <- names(sort(min_p_per_feat))[seq_len(min(40L, length(min_p_per_feat)))]
-
-  if (length(top_feat) >= 2) {
-    heat_df <- contrasts_df[contrasts_df$feature %in% top_feat, ]
-    heat_df$feat_fac <- factor(heat_df$feature,
-                               levels = rev(top_feat))
-    lfc_lim <- max(abs(heat_df$estimate), na.rm = TRUE)
-    if (!is.finite(lfc_lim) || lfc_lim == 0) lfc_lim <- 3
-
-    heat_df$tooltip <- paste0(
-      "<b>", heat_df$feature, "</b><br/>",
-      heat_df$contrast, "<br/>",
-      "LFC: ", round(heat_df$estimate, 3), "<br/>",
-      "p-adj: ", signif(heat_df$p_adj, 3))
-    heat_df$data_id <- paste(heat_df$feature, heat_df$contrast, sep = "|")
-
-    gg_heat <- ggplot2::ggplot(heat_df,
-        ggplot2::aes(x = contrast, y = feat_fac, fill = estimate,
-                     tooltip = tooltip, data_id = data_id)) +
-      ggiraph::geom_tile_interactive(colour = "white", linewidth = 0.25) +
-      ggplot2::scale_fill_gradient2(
-        low = "#4E9FD4", mid = "white", high = "#C0392B",
-        midpoint = 0, limits = c(-lfc_lim, lfc_lim),
-        name = "LFC", na.value = "#EEEEEE") +
-      ggplot2::theme(
-        axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, size = 9),
-        axis.text.y = ggplot2::element_text(size = 8)) +
-      ggplot2::labs(
-        x = NULL, y = NULL,
-        title = paste0("LFC heatmap \u2014 top ", length(top_feat),
-                       " features by min. adjusted p-value"),
-        caption = "Blue\u2009=\u2009lower in second group  \u2502  Red\u2009=\u2009higher in second group") +
-      theme_rmd()
-
-    tagList(as_girafe(gg_heat,
-                      w = max(7, 1.8 * length(contrast_names)),
-                      h = min(14, 0.28 * length(top_feat) + 2)))
-  }
-}, error = function(e) {
-  cat(paste0("> *Heatmap could not be rendered: ", conditionMessage(e), "*\n\n"))
-})
-```
-
-```{r omnibus-anchor, results='asis', eval=has_omnibus}
-cat(sprintf("<div id=\"s%d\" class=\"sec-anchor\"></div>\n\n", omnibus_sec_num))
-cat(sprintf("# %d &mdash; Omnibus Test\n\n", omnibus_sec_num))
-```
-
-```{r omnibus-infobox, results='asis', eval=has_omnibus}
-cat(info_box(
-  "What is the Omnibus Test?",
-  paste0(
-    "<p>The <strong>omnibus test</strong> is a global significance test that evaluates ",
-    "whether the target factor (e.g. treatment group) has <em>any</em> effect on a feature, ",
-    "jointly across all its levels, rather than testing individual pairwise differences.</p>",
-    "<ul>",
-    "<li><strong>Wald omnibus</strong>: uses the covariance matrix of the already-fitted ",
-    "model to compute W&nbsp;=&nbsp;&beta;'V<sup>&minus;1</sup>&beta;&nbsp;~&nbsp;&chi;<sup>2</sup>(df). ",
-    "Fast, no additional model fitting needed. Assumes large-sample asymptotics.</li>",
-    "<li><strong>LRT (Likelihood Ratio Test)</strong>: compares the full model against a ",
-    "reduced model without the target factor. More robust for small samples, but requires ",
-    "refitting a second model per feature (&asymp;2&times; slower).</li>",
-    "</ul>",
-    "<p>The omnibus test acts as a <strong>gatekeeper</strong>: only features with ",
-    "p&nbsp;&lt;&nbsp;omnibus_threshold proceed to pairwise contrast computation. ",
-    "This hierarchical approach (omnibus &rarr; contrasts) controls the family-wise ",
-    "Type&nbsp;I error rate more strictly than running contrasts without an omnibus filter. ",
-    "Features with <code>pass\u00a0=\u00a0FALSE</code> failed the omnibus test and were ",
-    "not tested further.</p>"
-  )
-))
-```
-
-```{r omnibus-table, eval=has_omnibus}
-de$omnibus %>%
-  mutate(statistic = round(statistic, 3), p_value = signif(p_value, 3)) %>%
-  datatable(rownames = FALSE, filter = "top",
-            caption = "Omnibus test results",
-            options  = list(pageLength = 15, scrollX = TRUE,
-                            dom = "lBfrtip",
-                            buttons = list("csv", "excel")),
-            extensions = "Buttons") %>%
-  formatStyle("pass",
-              backgroundColor = styleEqual(c(TRUE, FALSE),
-                                           c("#d4edda", "#f8d7da")))
-```
-
----
 
 ```{r footer}
 HTML(paste0(
@@ -1343,165 +1324,505 @@ HTML(paste0(
 ))
 ```
 
-```{r js-scripts, results='asis'}
-js <- '
+```{=html}
 <script>
 (function () {
   "use strict";
 
-  /* ---- Sidebar IntersectionObserver ---- */
-  window.addEventListener("load", function () {
+  /* ---- Shared constants ---- */
+  var COLOURS = { sig_lfc:"#C0392B", fdr_only:"#F4A460", lfc_only:"#4E9FD4", not_sig:"#AAAAAA" };
+  var TOOLTIP_BASE = {
+    backgroundColor:"white", borderColor:"#2C3E50", borderWidth:1,
+    textStyle:{ color:"#2C3E50", fontSize:12, fontFamily:"Helvetica Neue,Arial,sans-serif" },
+    extraCssText:"box-shadow:0 4px 12px rgba(0,0,0,.12);border-radius:6px;"
+  };
+  var ZOOM_TOOLBOX = {
+    feature: { dataZoom:{ yAxisIndex:"none" }, restore:{}, saveAsImage:{ pixelRatio:2 } }
+  };
 
-    var navLinks = document.querySelectorAll("#perseo-nav a");
+  /* ---- Utilities ---- */
+  function classify(est, pAdj, fdr, lfc) {
+    if (est==null||pAdj==null||!isFinite(est)||!isFinite(pAdj)) return "not_sig";
+    var al=Math.abs(est);
+    if (pAdj<fdr&&al>=lfc) return "sig_lfc";
+    if (pAdj<fdr)           return "fdr_only";
+    if (al>=lfc)            return "lfc_only";
+    return "not_sig";
+  }
+  function readCfg(el) {
+    var n=document.getElementById("cfg-"+el.id);
+    if(!n) return null;
+    try{ return JSON.parse(n.textContent); }catch(e){ return null; }
+  }
+  function tt(o) { return Object.assign({},TOOLTIP_BASE,o); }
 
-    var observed = [];
-    navLinks.forEach(function (link) {
-      var href = link.getAttribute("href");
-      if (href && href.startsWith("#")) {
-        var el = document.getElementById(href.substring(1));
-        if (el) observed.push({ link: link, el: el });
-      }
+  /* ---- Volcano ---- */
+  function initVolcano(el, cfg) {
+    var chart=echarts.init(el);
+    var rows=cfg.rows||[], fdr=cfg.fdr, lfc=cfg.lfc;
+
+    function mkData(rows){ return rows.map(function(r){
+      return { value:[r.estimate,r.neg_log10], name:r.feature,
+               p_adj:r.p_adj, itemStyle:{color:r.colour} }; }); }
+    function mkML(fdr,lfc){ return {
+      symbol:"none",silent:true,animation:false,
+      lineStyle:{type:"dashed",color:"#888"},
+      data:[{xAxis:lfc},{xAxis:-lfc},{yAxis:fdr>0?-Math.log(fdr)/Math.LN10:0}] }; }
+
+    chart.setOption({
+      toolbox: ZOOM_TOOLBOX,
+      dataZoom:[{type:"inside"},{type:"slider",bottom:0,height:16}],
+      grid:{left:60,right:30,top:30,bottom:70},
+      xAxis:{name:"Log Fold Change",nameLocation:"middle",nameGap:32,
+             splitLine:{lineStyle:{color:"#EEE"}}},
+      yAxis:{name:"-log\u2081\u2080(p-adj)",nameLocation:"middle",nameGap:48,
+             splitLine:{lineStyle:{color:"#EEE"}}},
+      tooltip:tt({trigger:"item",formatter:function(p){
+        var r=p.data;
+        return "<b>"+r.name+"</b><br/>LFC: "+r.value[0].toFixed(3)
+              +"<br/>p-adj: "+(r.p_adj==null?"NA":r.p_adj.toExponential(2)); }}),
+      series:[{type:"scatter",symbolSize:7,data:mkData(rows),markLine:mkML(fdr,lfc)}]
     });
 
-    if (observed.length > 0 && "IntersectionObserver" in window) {
-      var io = new IntersectionObserver(function (entries) {
-        entries.forEach(function (entry) {
-          if (entry.isIntersecting) {
-            navLinks.forEach(function (l) { l.classList.remove("active"); });
-            var id = entry.target.id;
-            var active = document.querySelector(
-              "#perseo-nav a[href=\"#" + id + "\"]");
-            if (active) active.classList.add("active");
-          }
-        });
-      }, { rootMargin: "-10% 0px -65% 0px", threshold: 0 });
+    chart.__perseoRefresh=function(newFdr,newLfc){
+      var count=0;
+      var d=rows.map(function(r){
+        var cat=classify(r.estimate,r.p_adj,newFdr,newLfc);
+        if(cat==="sig_lfc")count++;
+        return {value:[r.estimate,r.neg_log10],name:r.feature,
+                p_adj:r.p_adj,itemStyle:{color:COLOURS[cat]}};
+      });
+      chart.setOption({series:[{data:d,markLine:mkML(newFdr,newLfc)}]});
+      return count;
+    };
+    return chart;
+  }
 
-      observed.forEach(function (item) { io.observe(item.el); });
+  /* ---- MA plot ---- */
+  function initMA(el, cfg) {
+    var chart=echarts.init(el);
+    var rows=cfg.rows||[];
+    chart.setOption({
+      toolbox:ZOOM_TOOLBOX,
+      dataZoom:[{type:"inside"},{type:"slider",bottom:0,height:16}],
+      grid:{left:65,right:30,top:30,bottom:70},
+      xAxis:{name:cfg.xlab||"x",nameLocation:"middle",nameGap:32,
+             splitLine:{lineStyle:{color:"#EEE"}}},
+      yAxis:{name:"Log Fold Change",nameLocation:"middle",nameGap:48,
+             splitLine:{lineStyle:{color:"#EEE"}}},
+      tooltip:tt({trigger:"item",formatter:function(p){
+        var r=p.data;
+        return "<b>"+r.name+"</b><br/>x: "+r.value[0].toFixed(3)
+              +"<br/>LFC: "+r.value[1].toFixed(3)
+              +"<br/>p-adj: "+(r.p_adj==null?"NA":r.p_adj.toExponential(2)); }}),
+      series:[{type:"scatter",symbolSize:6,
+        data:rows.map(function(r){
+          return {value:[r.x,r.estimate],name:r.feature,p_adj:r.p_adj,
+                  itemStyle:{color:r.colour}}; }),
+        markLine:{symbol:"none",silent:true,animation:false,
+          lineStyle:{type:"dashed",color:"#888"},
+          data:[{yAxis:0},{yAxis:cfg.lfc},{yAxis:-cfg.lfc}]} }]
+    });
+    return chart;
+  }
+
+  /* ---- Boxplot ---- */
+  function initBoxplot(el, cfg) {
+    var chart=echarts.init(el);
+    var feats=cfg.features||[];
+    var bA=(cfg.boxA||[]).map(function(b){return b.map(Number);});
+    var bB=(cfg.boxB||[]).map(function(b){return b.map(Number);});
+    var oA=(cfg.outA||[]).map(function(o){return [o.feat,o.value];});
+    var oB=(cfg.outB||[]).map(function(o){return [o.feat,o.value];});
+    chart.setOption({
+      legend:{data:[cfg.groupA,cfg.groupB],top:0},
+      toolbox:ZOOM_TOOLBOX,
+      grid:{left:75,right:20,top:40,bottom:90},
+      xAxis:{type:"category",data:feats,
+             axisLabel:{rotate:40,fontSize:10,interval:0},
+             splitArea:{show:true,areaStyle:{color:["#FAFAFA","#FFFFFF"]}}},
+      yAxis:{nameLocation:"middle",nameGap:55,
+             splitLine:{lineStyle:{color:"#EEE"}}},
+      tooltip:tt({trigger:"item",formatter:function(p){
+        if(p.seriesType==="boxplot"){
+          var v=p.data;
+          return "<b>"+feats[p.dataIndex]+"</b> — "+p.seriesName
+                +"<br/>min: "+Number(v[1]).toFixed(3)
+                +"<br/>Q1: " +Number(v[2]).toFixed(3)
+                +"<br/>med: "+Number(v[3]).toFixed(3)
+                +"<br/>Q3: " +Number(v[4]).toFixed(3)
+                +"<br/>max: "+Number(v[5]).toFixed(3); }
+        return p.seriesName+": "+Number(p.value[1]).toFixed(3); }}),
+      series:[
+        {name:cfg.groupA,type:"boxplot",
+         itemStyle:{color:"#AED6F1",borderColor:"#2980B9"},data:bA},
+        {name:cfg.groupB,type:"boxplot",
+         itemStyle:{color:"#F5B7B1",borderColor:"#C0392B"},data:bB},
+        {name:cfg.groupA+" out",type:"scatter",symbolSize:5,
+         itemStyle:{color:"#2980B9"},data:oA},
+        {name:cfg.groupB+" out",type:"scatter",symbolSize:5,
+         itemStyle:{color:"#C0392B"},data:oB}
+      ]
+    });
+    return chart;
+  }
+
+  /* ---- Family bar ---- */
+  function initFamilyBar(el, cfg) {
+    var chart=echarts.init(el);
+    var rows=(cfg.rows||[]).slice().sort(function(a,b){return a.n-b.n;});
+    chart.setOption({
+      grid:{left:80,right:60,top:20,bottom:30},
+      xAxis:{type:"value",name:"Features",splitLine:{lineStyle:{color:"#EEE"}}},
+      yAxis:{type:"category",data:rows.map(function(r){return r.family;}),
+             axisLabel:{fontSize:11}},
+      tooltip:tt({trigger:"item",formatter:function(p){
+        return "<b>"+p.name+"</b><br/>"+p.data.full
+              +"<br/>Features: "+p.value+" ("+p.data.pct.toFixed(1)+"%)"; }}),
+      series:[{type:"bar",
+        data:rows.map(function(r){
+          return {value:r.n,pct:r.pct,full:r.full||r.family,
+                  itemStyle:{color:r.colour||"#2C6E9B"}}; }),
+        label:{show:true,position:"right",fontSize:11,
+               formatter:function(p){return p.value+" ("+p.data.pct.toFixed(1)+"%)";}} }]
+    });
+    return chart;
+  }
+
+  /* ---- IC Histogram ---- */
+  function initICHist(el, cfg) {
+    var chart=echarts.init(el);
+    var mids=cfg.bin_mids||[];
+    var PAL=["#2C6E9B","#C0392B","#27AE60","#E67E22","#8E44AD",
+             "#16A085","#D4AC0D","#34495E","#7F8C8D","#2E86C1",
+             "#6C5CE7","#E17055","#00B894","#FDCB6E","#0984E3"];
+    var series=(cfg.series||[]).map(function(s,i){
+      return {name:s.name||s.family,type:"bar",stack:"ic",
+              itemStyle:{color:s.colour||PAL[i%PAL.length]},data:s.counts}; });
+    chart.setOption({
+      legend:{top:0,type:"scroll"},
+      grid:{left:60,right:25,top:50,bottom:55},
+      xAxis:{type:"category",data:mids.map(function(m){return Number(m).toFixed(1);}),
+             name:"IC (BIC / AIC)",nameLocation:"middle",nameGap:32},
+      yAxis:{type:"value",name:"Count",nameLocation:"middle",nameGap:45},
+      tooltip:tt({trigger:"axis",axisPointer:{type:"shadow"}}),
+      series:series
+    });
+    return chart;
+  }
+
+  /* ---- LFC Heatmap ---- */
+  function initHeatmap(el, cfg) {
+    var chart=echarts.init(el);
+    var feats=cfg.features||[], conts=cfg.contrasts||[], lim=cfg.lfc_lim||3;
+    var fi={},ci={};
+    feats.forEach(function(f,i){fi[f]=i;});
+    conts.forEach(function(c,i){ci[c]=i;});
+    var data=(cfg.cells||[]).map(function(r){
+      return [ci[r.contrast],fi[r.feature],r.estimate,r.feature,r.contrast,r.p_adj]; });
+    chart.setOption({
+      grid:{left:140,right:50,top:30,bottom:80},
+      xAxis:{type:"category",data:conts,axisLabel:{rotate:40,fontSize:10}},
+      yAxis:{type:"category",data:feats,axisLabel:{fontSize:10}},
+      visualMap:{min:-lim,max:lim,calculable:true,orient:"vertical",
+        right:5,top:"center",
+        inRange:{color:["#4E9FD4","#FFFFFF","#C0392B"]},text:["+LFC","-LFC"]},
+      tooltip:tt({formatter:function(p){
+        return "<b>"+p.data[3]+"</b><br/>"+p.data[4]
+              +"<br/>LFC: "+(p.data[2]==null?"NA":Number(p.data[2]).toFixed(3))
+              +"<br/>p-adj: "+(p.data[5]==null?"NA":Number(p.data[5]).toExponential(2));}}),
+      series:[{type:"heatmap",
+        data:data.map(function(d){
+          return {value:[d[0],d[1],d[2]],raw:d,
+                  itemStyle:d[2]==null?{color:"#EEE"}:undefined}; }) }]
+    });
+    return chart;
+  }
+
+  /* ---- Venn SVG (≤4 sets) ---- */
+  function initVenn(el, cfg) {
+    var sets=cfg.sets||[], regions=cfg.regions||[], n=sets.length;
+    var W=560, H=380, R=120;
+    /* Circle centres for 2, 3, 4 sets */
+    var CX, CY;
+    if(n===2){ CX=[W/2-70,W/2+70]; CY=[H/2,H/2]; }
+    else if(n===3){ CX=[W/2-80,W/2+80,W/2]; CY=[H/2-55,H/2-55,H/2+75]; }
+    else{ CX=[W/2-75,W/2+75,W/2-75,W/2+75]; CY=[H/2-55,H/2-55,H/2+55,H/2+55]; }
+
+    /* Approximate label positions per exclusive region */
+    function regionLabel(mask) {
+      /* weighted centroid of included circles */
+      var sx=0,sy=0,k=0;
+      mask.forEach(function(idx){sx+=CX[idx];sy+=CY[idx];k++;});
+      var cx=sx/k, cy=sy/k;
+      /* Push toward centroid if single-set (outer region) */
+      if(mask.length===1){
+        var i=mask[0]; var wx=W/2,wy=H/2;
+        cx=CX[i]+(CX[i]-wx)*0.45; cy=CY[i]+(CY[i]-wy)*0.45;
+      }
+      return {x:cx,y:cy};
     }
 
-    /* ---- Volcano threshold sliders ---- */
-    var COLOURS = {
-      sig_lfc : "#C0392B",
-      fdr_only: "#F4A460",
-      lfc_only: "#4E9FD4",
-      not_sig : "#AAAAAA"
+    var FILL=["#AED6F1","#A9DFBF","#FAD7A0","#D7BDE2",
+              "#FADADD","#A3E4D7","#F9E79F","#D5DBDB"];
+    var STROKE=["#2980B9","#27AE60","#E67E22","#8E44AD",
+                "#C0392B","#16A085","#D4AC0D","#7F8C8D"];
+
+    var circles=sets.map(function(s,i){
+      return '<circle cx="'+CX[i]+'" cy="'+CY[i]+'" r="'+R+'"'
+            +' fill="'+FILL[i%FILL.length]+'" fill-opacity="0.35"'
+            +' stroke="'+STROKE[i%STROKE.length]+'" stroke-width="2"/>';
+    }).join("");
+
+    var labels=sets.map(function(s,i){
+      var lx=CX[i]+(CX[i]-W/2)*0.28, ly=CY[i]+(CY[i]-H/2)*0.28-R*0.65;
+      return '<text x="'+lx+'" y="'+ly+'" text-anchor="middle"'
+            +' font-size="13" font-weight="700" fill="'+STROKE[i%STROKE.length]+'">'+escSVG(s)+'</text>';
+    }).join("");
+
+    var counts=regions.map(function(reg){
+      if(reg.size===0) return "";
+      var pos=regionLabel(reg.sets);
+      return '<text x="'+pos.x+'" y="'+(pos.y+5)+'" text-anchor="middle"'
+            +' font-size="15" font-weight="700" fill="#2C3E50">'+reg.size+'</text>';
+    }).join("");
+
+    var totalSig=cfg.sizes?cfg.sizes.reduce(function(a,b){return a+b;},0):0;
+    var caption="FDR&lt;"+cfg.fdr+" &amp; |LFC|&ge;"+cfg.lfc;
+
+    el.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-height:420px">'
+      +'<text x="'+W/2+'" y="22" text-anchor="middle" font-size="14" font-weight="600" fill="#2C3E50">'
+      +'Significant feature overlap</text>'
+      +'<text x="'+W/2+'" y="40" text-anchor="middle" font-size="11" fill="#888">'+caption+'</text>'
+      +circles+labels+counts
+      +'</svg>';
+    return {resize:function(){}};
+  }
+  function escSVG(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+
+  /* ---- UpSet chart (>4 sets via ECharts) ---- */
+  function initUpset(el, cfg) {
+    var sets  = cfg.sets || [];
+    var rows  = (cfg.rows || []).slice(0, 20);
+    var nS    = sets.length;
+    var nR    = rows.length;
+    if (nR === 0) {
+      el.innerHTML = '<p style="text-align:center;padding:40px;color:#888">No intersections to display.</p>';
+      return { resize: function(){} };
+    }
+
+    /* Decode pattern "1001.." -> array of 0/1 */
+    function bits(pat) {
+      return (pat || "").split("").map(Number);
+    }
+
+    var SET_COLS = ["#2C6E9B","#C0392B","#27AE60","#E67E22","#8E44AD",
+                    "#16A085","#D4AC0D","#34495E","#7F8C8D","#2E86C1"];
+
+    var BAR_H   = 200;
+    var DOT_ROW = 26;
+    var TOP     = 45;
+    var LEFT    = 140;
+    var DOT_TOP = BAR_H + TOP + 30;
+
+    var chart = echarts.init(el);
+
+    /* Bar series */
+    var barSeries = {
+      type:"bar", xAxisIndex:0, yAxisIndex:0,
+      data: rows.map(function(r){ return r.count||0; }),
+      itemStyle:{ color:"#2C6E9B" },
+      label:{ show:true, position:"top", fontSize:11,
+              formatter:function(p){ return p.value>0?p.value:""; } }
     };
 
-    function classify(estimate, pAdj, fdr, lfc) {
-      if (estimate === null || pAdj === null ||
-          estimate === undefined || pAdj === undefined) return "not_sig";
-      var al = Math.abs(estimate);
-      if (pAdj < fdr && al >= lfc) return "sig_lfc";
-      if (pAdj < fdr)              return "fdr_only";
-      if (al   >= lfc)             return "lfc_only";
-      return "not_sig";
-    }
-
-    function refreshVolcano(slug, fdr, lfc) {
-      var dataEl = document.getElementById("cdata-" + slug);
-      if (!dataEl) return 0;
-      var rows;
-      try { rows = JSON.parse(dataEl.textContent); } catch (e) { return 0; }
-
-      var map = {};
-      rows.forEach(function (r) { map[r.feature] = r; });
-
-      var sec = document.getElementById("csec-" + slug);
-      if (!sec) return 0;
-
-      /* ggiraph volcano: geom_point_interactive renders each point as an SVG
-         circle with data-id set and fill applied as an inline style (often
-         with !important) AND as an SVG attribute. We override both. */
-      var pts = sec.querySelectorAll("svg [data-id]");
-      if (pts.length === 0) pts = sec.querySelectorAll("[data-id]");
-      var count = 0;
-      pts.forEach(function (pt) {
-        var fid = pt.getAttribute("data-id");
-        var row = map[fid];
-        if (!row) return;
-        var cat = classify(row.estimate, row.p_adj, fdr, lfc);
-        var col = COLOURS[cat];
-        pt.setAttribute("fill",   col);
-        pt.setAttribute("stroke", col);
-        pt.style.setProperty("fill",   col, "important");
-        pt.style.setProperty("stroke", col, "important");
-        if (cat === "sig_lfc") count++;
+    /* One scatter series per set — dots where that set is in the intersection */
+    var dotSeries = sets.map(function(s, si){
+      var colFill  = SET_COLS[si % SET_COLS.length];
+      var data = [];
+      rows.forEach(function(r, ri){
+        var b = bits(r.pattern);
+        if (b[si] === 1) data.push({ value:[ri, si], ri:ri });
       });
-      return count;
-    }
+      return {
+        type:"scatter", xAxisIndex:1, yAxisIndex:1,
+        symbolSize:12,
+        itemStyle:{ color:colFill },
+        data: data,
+        z: 5
+      };
+    });
 
-    function initControls() {
-      document.querySelectorAll(".volcano-controls").forEach(function (ctrl) {
-        var slug     = ctrl.id.replace("ctrl-", "");
-        var fdrSldr  = ctrl.querySelector(".fdr-slider");
-        var lfcSldr  = ctrl.querySelector(".lfc-slider");
-        var fdrDisp  = ctrl.querySelector(".fdr-val");
-        var lfcDisp  = ctrl.querySelector(".lfc-val");
-        var cntDisp  = ctrl.querySelector(".sig-count");
+    /* Grey background dots for "not in set" positions */
+    var greyData = [];
+    rows.forEach(function(r, ri){
+      var b = bits(r.pattern);
+      b.forEach(function(v, si){ if(v===0) greyData.push([ri,si]); });
+    });
+    var greySeries = {
+      type:"scatter", xAxisIndex:1, yAxisIndex:1,
+      symbolSize:10,
+      itemStyle:{ color:"#DDD" },
+      data:greyData, z:3
+    };
 
-        if (!fdrSldr || !lfcSldr) return;
+    /* Vertical connectors via custom series — safer than markLine on empty series */
+    var connData = [];
+    rows.forEach(function(r, ri){
+      var b = bits(r.pattern);
+      var active = [];
+      b.forEach(function(v,si){ if(v===1) active.push(si); });
+      if(active.length > 1){
+        connData.push({ ri:ri, minSi:active[0], maxSi:active[active.length-1] });
+      }
+    });
+    var connSeries = {
+      type:"custom", xAxisIndex:1, yAxisIndex:1,
+      z:4, silent:true,
+      renderItem: function(params, api){
+        var cri    = params.dataIndex;
+        var d      = connData[cri];
+        var p0     = api.coord([d.ri, d.minSi]);
+        var p1     = api.coord([d.ri, d.maxSi]);
+        return { type:"line",
+          shape:{ x1:p0[0], y1:p0[1], x2:p1[0], y2:p1[1] },
+          style:{ stroke:"#2C6E9B", lineWidth:3 } };
+      },
+      data: connData.map(function(d){ return [d.ri, d.minSi]; })
+    };
 
-        function update() {
-          var fdr = parseFloat(fdrSldr.value);
-          var lfc = parseFloat(lfcSldr.value);
-          if (fdrDisp) fdrDisp.textContent = fdr.toFixed(3);
-          if (lfcDisp) lfcDisp.textContent = lfc.toFixed(1);
-          var n = refreshVolcano(slug, fdr, lfc);
-          if (cntDisp) cntDisp.textContent = n;
+    var xCats = rows.map(function(_,i){ return i+1; });
+
+    chart.setOption({
+      grid:[
+        { left:LEFT, right:20, top:TOP,      height:BAR_H      },
+        { left:LEFT, right:20, top:DOT_TOP,  height:nS*DOT_ROW }
+      ],
+      xAxis:[
+        { gridIndex:0, type:"category", data:xCats,
+          axisLabel:{show:false}, axisTick:{show:false}, axisLine:{show:false} },
+        { gridIndex:1, type:"category", data:xCats,
+          axisLabel:{show:false}, axisTick:{show:false}, axisLine:{show:false} }
+      ],
+      yAxis:[
+        { gridIndex:0, type:"value", name:"Intersection size",
+          nameLocation:"middle", nameGap:50,
+          splitLine:{lineStyle:{color:"#EEE"}}, min:0 },
+        { gridIndex:1, type:"category", data:sets,
+          axisLabel:{ fontSize:11, width:130, overflow:"truncate" },
+          axisTick:{show:false}, splitLine:{show:false} }
+      ],
+      tooltip: tt({ trigger:"item", formatter:function(p){
+        if(p.seriesType==="bar"){
+          var r=rows[p.dataIndex];
+          var b=bits(r.pattern);
+          var names=[];
+          b.forEach(function(v,si){if(v===1)names.push(sets[si]);});
+          return "<b>"+p.value+" features</b><br/>"+names.join("<br/>");
         }
+        return "";
+      }}),
+      series: [barSeries, connSeries, greySeries].concat(dotSeries)
+    });
+    return chart;
+  }
 
-        fdrSldr.addEventListener("input", update);
-        lfcSldr.addEventListener("input", update);
-        /* Initial paint after widget renders */
-        setTimeout(update, 800);
-      });
-    }
+  /* ---- Dispatch map ---- */
+  var DISPATCH = {
+    volcano:initVolcano, ma:initMA, boxplot:initBoxplot,
+    family_bar:initFamilyBar, ic_hist:initICHist,
+    venn:initVenn, upset:initUpset
+  };
 
-    /* ggiraph widgets render asynchronously; wait a moment */
-    setTimeout(initControls, 600);
+  var charts=[];
 
-    /* Re-apply slider classification when a tab is shown (ggiraph
-       sometimes re-paints point fills on layout change). */
-    if (window.jQuery) {
-      window.jQuery(document).on("shown.bs.tab", function () {
-        document.querySelectorAll(".volcano-controls").forEach(function (ctrl) {
-          var slug = ctrl.id.replace("ctrl-", "");
-          var fdr  = parseFloat(ctrl.querySelector(".fdr-slider").value);
-          var lfc  = parseFloat(ctrl.querySelector(".lfc-slider").value);
-          refreshVolcano(slug, fdr, lfc);
+  function initAllCharts() {
+    if(typeof echarts==="undefined") return;
+    document.querySelectorAll(".perseo-chart").forEach(function(el){
+      if(el.__perseoInit) return;
+      var type=el.getAttribute("data-chart-type");
+      var cfg=readCfg(el), fn=DISPATCH[type];
+      if(!fn||!cfg) return;
+      try{
+        var c=fn(el,cfg);
+        el.__perseoInit=true; el.__perseoChart=c;
+        if(c&&typeof c.resize==="function") charts.push(c);
+      }catch(e){ console.error("Chart init failed:",type,e); }
+    });
+  }
+
+  function wireVolcanoSliders() {
+    document.querySelectorAll(".volcano-controls").forEach(function(ctrl){
+      var tid=ctrl.getAttribute("data-chart");
+      var target=tid?document.getElementById(tid):null;
+      if(!target) return;
+      var fs=ctrl.querySelector(".fdr-slider"), ls=ctrl.querySelector(".lfc-slider");
+      var fd=ctrl.querySelector(".fdr-val"),  ld=ctrl.querySelector(".lfc-val");
+      var cd=ctrl.querySelector(".sig-count");
+      if(!fs||!ls) return;
+      function upd(){
+        var fdr=parseFloat(fs.value), lfc=parseFloat(ls.value);
+        if(fd) fd.textContent=fdr.toFixed(3);
+        if(ld) ld.textContent=lfc.toFixed(1);
+        if(target.__perseoChart&&target.__perseoChart.__perseoRefresh){
+          var n=target.__perseoChart.__perseoRefresh(fdr,lfc);
+          if(cd) cd.textContent=n;
+        }
+      }
+      fs.addEventListener("input",upd); ls.addEventListener("input",upd);
+    });
+  }
+
+  function wireSidebar() {
+    var links=document.querySelectorAll("#perseo-nav a");
+    var obs=[];
+    links.forEach(function(link){
+      var h=link.getAttribute("href");
+      if(h&&h.charAt(0)==="#"){ var el=document.getElementById(h.substring(1));
+        if(el) obs.push({link:link,el:el}); }
+    });
+    if(obs.length&&"IntersectionObserver"in window){
+      var io=new IntersectionObserver(function(entries){
+        entries.forEach(function(e){
+          if(e.isIntersecting){
+            links.forEach(function(l){l.classList.remove("active");});
+            var a=document.querySelector("#perseo-nav a[href=\"#"+e.target.id+"\"]");
+            if(a) a.classList.add("active");
+          }
         });
-      });
+      },{rootMargin:"-10% 0px -65% 0px",threshold:0});
+      obs.forEach(function(item){io.observe(item.el);});
     }
-
-    /* Sidebar -> tabset bridge: clicking a sidebar link that targets a
-       bootstrap tab pane should activate that tab. */
-    navLinks.forEach(function (link) {
-      var href = link.getAttribute("href");
-      if (!href || href.charAt(0) !== "#") return;
-      var id = href.substring(1);
-      var target = document.getElementById(id);
-      if (!target) return;
-      var isTabPane =
-        (target.className || "").indexOf("section") !== -1 &&
-        (target.closest && target.closest(".tabset"));
-      if (!isTabPane) return;
-      link.addEventListener("click", function (ev) {
-        var tabLink = document.querySelector(
-          \'ul.nav-pills a[href="#\' + id + \'"], \' +
-          \'ul.nav-tabs a[href="#\' + id + \'"]\');
-        if (tabLink) {
+    links.forEach(function(link){
+      var h=link.getAttribute("href");
+      if(!h||h.charAt(0)!=="#") return;
+      var id=h.substring(1), target=document.getElementById(id);
+      if(!target) return;
+      var isTab=(target.className||"").indexOf("section")!==-1
+               &&(target.closest&&target.closest(".tabset"));
+      if(!isTab) return;
+      link.addEventListener("click",function(ev){
+        var tl=document.querySelector("ul.nav-pills a[href=\"#"+id+"\"],ul.nav-tabs a[href=\"#"+id+"\"]");
+        if(tl){
           ev.preventDefault();
-          if (window.jQuery) window.jQuery(tabLink).tab("show");
-          else tabLink.click();
-          setTimeout(function () {
-            target.scrollIntoView({ behavior: "smooth", block: "start" });
-          }, 50);
+          if(window.jQuery) window.jQuery(tl).tab("show"); else tl.click();
+          setTimeout(function(){target.scrollIntoView({behavior:"smooth",block:"start"});},50);
         }
       });
     });
+  }
+
+  function resizeAll(){ charts.forEach(function(c){try{c.resize();}catch(e){}}); }
+
+  window.addEventListener("load",function(){
+    initAllCharts();
+    wireVolcanoSliders();
+    wireSidebar();
+    window.addEventListener("resize",resizeAll);
+    if(window.jQuery){
+      window.jQuery(document).on("shown.bs.tab",function(){setTimeout(resizeAll,50);});
+    }
   });
 }());
 </script>
-'
-cat(js, "\n")
 ```

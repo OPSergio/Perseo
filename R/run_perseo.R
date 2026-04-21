@@ -402,9 +402,14 @@ run_perseo <- function(counts_matrix,
   # ---- Return structured results ----
   structure(
     list(
-      family_selection = family_results,
+      family_selection        = family_results,
       differential_expression = de_results,
-      summary = summary_info
+      summary                 = summary_info,
+      input_data              = list(
+        counts_matrix     = counts_matrix,
+        metadata          = metadata,
+        contrast_variable = contrast_variable
+      )
     ),
     class = c("perseo_results", "list")
   )

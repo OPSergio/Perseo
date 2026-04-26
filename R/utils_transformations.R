@@ -58,11 +58,20 @@ transform_response <- function(y, fam, mode = c("strict", "safe"), eps = 1e-6, a
   n <- length(y)
   finite_y <- is.finite(y)
   
-  fam_count    <- c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB")
-  fam_unit     <- c("BE","BEINF","BEO","BEZI","BEo","BEINF0")
-  fam_positive <- c("GA","GG","LOGNO","IG")
-  fam_real     <- c("NO","TF","GU")
-  
+  fam_count       <- c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG")
+  fam_unit        <- c("BE","BEINF","BEO","BEZI","BEo","BEINF0")
+  fam_positive    <- c("GA","GG","LOGNO","IG","WEI")
+  fam_zi_positive <- c("ZILN","ZAGA","ZAIG")
+  fam_real        <- c("NO","TF","GU")
+
+  # Zero-inflated positive continuous: identity (zeros are structural, keep them)
+  if (fam %in% fam_zi_positive) {
+    mask <- finite_y & (y >= 0)
+    logJ <- rep(0, length(y))
+    meta <- list(kind = "identity", params = list())
+    return(list(y = y, mask = mask, logJ_per_obs = logJ, meta = meta, mode_used = "safe"))
+  }
+
   # Positive continuous: global shift if min(y) <= 0
   if (fam %in% fam_positive) {
     yy <- y[finite_y]
@@ -169,8 +178,16 @@ transform_response <- function(y, fam, mode = c("strict", "safe"), eps = 1e-6, a
 #' @return Numeric vector transformed (same length as `y`).
 #' @export
 transform_for_family <- function(y, fam, strategy = "safe", eps = 1e-6) {
-  # A: (0, ∞) – strictly positive continuous (GA, GG, LOGNO, IG)
-  if (fam %in% c("GA", "GG", "LOGNO", "IG")) {
+  # [0, ∞) – zero-inflated positive continuous (ZILN, ZAGA, ZAIG)
+  if (fam %in% c("ZILN", "ZAGA", "ZAIG")) {
+    if (strategy == "strict") {
+      y[y < 0] <- NA
+    }
+    return(y)
+  }
+
+  # A: (0, ∞) – strictly positive continuous (GA, GG, LOGNO, IG, WEI)
+  if (fam %in% c("GA", "GG", "LOGNO", "IG", "WEI")) {
     if (strategy == "safe") {
       y[y <= 0] <- eps
     } else {
@@ -179,8 +196,8 @@ transform_for_family <- function(y, fam, strategy = "safe", eps = 1e-6) {
     return(y)
   }
 
-  # B: [0, ∞) – counts (PO, NBI, ZIP, ZINBI, ZIP2)
-  if (fam %in% c("PO", "NBI", "ZINBI", "ZIP", "ZIP2")) {
+  # B: [0, ∞) – counts (PO, NBI, ZIP, ZINBI, ZIP2, PIG)
+  if (fam %in% c("PO", "NBI", "ZINBI", "ZIP", "ZIP2", "PIG")) {
     y <- round(y)
     if (strategy == "safe") {
       y[y < 0] <- 0
@@ -247,10 +264,20 @@ transform_for_family_strict <- function(y, fam, eps = 1e-6, allow_eps = TRUE) {
   n <- length(y)
   finite_y <- is.finite(y)
 
-  fam_count    <- c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB")
-  fam_unit     <- c("BE","BEINF","BEO","BEZI","BEo","BEINF0")
-  fam_positive <- c("GA","GG","LOGNO","IG")
-  fam_real     <- c("NO","TF","GU")
+  fam_count       <- c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG")
+  fam_unit        <- c("BE","BEINF","BEO","BEZI","BEo","BEINF0")
+  fam_positive    <- c("GA","GG","LOGNO","IG","WEI")
+  fam_zi_positive <- c("ZILN","ZAGA","ZAIG")
+  fam_real        <- c("NO","TF","GU")
+
+  # Zero-inflated positive continuous: identity; valid if y >= 0
+  if (fam %in% fam_zi_positive) {
+    mask <- finite_y & (y >= 0)
+    z    <- y
+    logJ <- rep(0, n)
+    meta <- list(kind = "identity", params = list())
+    return(list(y = z, mask = mask, logJ_per_obs = logJ, meta = meta))
+  }
 
   # Counts: identity; valid if integer >= 0
   if (fam %in% fam_count) {
@@ -381,10 +408,11 @@ inverse_transform <- function(z, meta) {
 #' @export
 family_groups <- function() {
   list(
-    count    = c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB"),
-    unit     = c("BE","BEINF","BEO","BEZI","BEo","BEINF0"),
-    positive = c("GA","GG","LOGNO","IG"),
-    real     = c("NO","TF","GU")
+    count       = c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG"),
+    unit        = c("BE","BEINF","BEO","BEZI","BEo","BEINF0"),
+    positive    = c("GA","GG","LOGNO","IG","WEI"),
+    zi_positive = c("ZILN","ZAGA","ZAIG"),
+    real        = c("NO","TF","GU")
   )
 }
 
@@ -392,7 +420,7 @@ family_groups <- function() {
 #' Infer empirical support of a response vector
 #'
 #' @param y Numeric vector.
-#' @return One of "count", "unit", "positive", "real", or "none".
+#' @return One of "count", "unit", "positive", "zi_positive", "real", or "none".
 #' @export
 infer_support <- function(y) {
   finite_y <- is.finite(y)
@@ -404,6 +432,10 @@ infer_support <- function(y) {
 
   if (all(yy >= 0, na.rm = TRUE) && max(yy, na.rm = TRUE) <= 1) return("unit")
   if (all(yy > 0, na.rm = TRUE)) return("positive")
+
+  # Zeros + positive non-integer values (not all-negative) → zero-inflated positive continuous
+  if (min(yy, na.rm = TRUE) >= 0 && any(yy > 0)) return("zi_positive")
+
   "real"
 }
 

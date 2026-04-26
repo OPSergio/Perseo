@@ -79,18 +79,21 @@ validate_criterion_args <- function(criterion, gaic_k = NULL) {
 #' Default candidate GAMLSS families
 #'
 #' Returns the standard set of families used when user does not provide a
-#' custom list. Includes count, unit, positive, and real-valued distributions.
+#' custom list. Includes count, unit, positive, zero-inflated positive, and
+#' real-valued distributions.
 #'
-#' @return Character vector with 18 family names.
+#' @return Character vector with 24 family names.
 #' @keywords internal
 default_candidate_families <- function() {
   c(
     # Unit interval (plain + inflated)
     "BE", "BEO", "BEINF", "BEZI", "BEo", "BEINF0",
     # Counts (including zero-inflated and binomial)
-    "PO", "NBI", "ZIP", "ZINBI", "BI", "BB",
+    "PO", "NBI", "ZIP", "ZINBI", "BI", "BB", "PIG",
     # Positive continuous
-    "GA", "GG", "IG", "LOGNO",
+    "GA", "GG", "IG", "LOGNO", "WEI",
+    # Zero-inflated positive continuous
+    "ZILN", "ZAGA", "ZAIG",
     # Real-valued
     "NO", "TF", "GU"
   )

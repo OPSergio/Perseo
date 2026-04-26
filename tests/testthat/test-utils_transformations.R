@@ -127,22 +127,66 @@ test_that("transform_for_family_strict handles edge cases", {
   expect_true(all(tr_const$mask))
 })
 
+test_that("infer_support correctly identifies zi_positive data", {
+  # Zeros + positive non-integer values (ZILN/ZAGA/ZAIG type)
+  ziln_like <- c(0, 0, 1.5, 3.2, 0, 5.1, 12.7)
+  expect_equal(infer_support(ziln_like), "zi_positive")
+
+  # With NAs
+  ziln_na <- c(0, NA, 2.3, 0, 5.8)
+  expect_equal(infer_support(ziln_na), "zi_positive")
+
+  # Should NOT trigger for data with negatives (→ real)
+  mixed_neg <- c(-1.5, 0, 2.3, 5.1)
+  expect_equal(infer_support(mixed_neg), "real")
+
+  # Should NOT trigger for integers with zeros (→ count)
+  int_zeros <- c(0L, 0L, 3L, 5L, 2L)
+  expect_equal(infer_support(int_zeros), "count")
+
+  # Should NOT trigger for unit-interval data with zeros (→ unit, caught first)
+  unit_zeros <- c(0, 0.2, 0.5, 0.8, 1.0)
+  expect_equal(infer_support(unit_zeros), "unit")
+})
+
+test_that("transform_for_family_strict handles zi_positive families", {
+  # ZILN-like data: zeros + positive continuous
+  ziln_data <- c(0, 0, 1.5, 3.2, 0, 8.7, 15.1)
+
+  tr <- transform_for_family_strict(ziln_data, "ZILN")
+  expect_equal(tr$y, ziln_data)                    # identity transform
+  expect_true(all(tr$mask))                        # all values >= 0, all valid
+  expect_equal(sum(tr$logJ_per_obs), 0)            # zero Jacobian for identity
+
+  # Negative values must be masked out
+  bad_data <- c(-1, 0, 2.5, 5.0)
+  tr_bad <- transform_for_family_strict(bad_data, "ZAGA")
+  expect_false(tr_bad$mask[1])
+  expect_true(all(tr_bad$mask[-1]))
+})
+
 test_that("family_groups returns correct categorization", {
   groups <- family_groups()
-  
+
   expect_type(groups, "list")
-  expect_true("count" %in% names(groups))
-  expect_true("unit" %in% names(groups))
-  expect_true("positive" %in% names(groups))
-  expect_true("real" %in% names(groups))
-  
+  expect_true("count"       %in% names(groups))
+  expect_true("unit"        %in% names(groups))
+  expect_true("positive"    %in% names(groups))
+  expect_true("zi_positive" %in% names(groups))
+  expect_true("real"        %in% names(groups))
+
   # Check specific families
-  expect_true("PO" %in% groups$count)
-  expect_true("NBI" %in% groups$count)
-  expect_true("GA" %in% groups$positive)
+  expect_true("PO"   %in% groups$count)
+  expect_true("NBI"  %in% groups$count)
+  expect_true("PIG"  %in% groups$count)
+  expect_true("GA"   %in% groups$positive)
   expect_true("LOGNO" %in% groups$positive)
-  expect_true("BE" %in% groups$unit)
-  expect_true("NO" %in% groups$real)
+  expect_true("WEI"  %in% groups$positive)
+  expect_true("BE"   %in% groups$unit)
+  expect_true("NO"   %in% groups$real)
+  expect_true("ZILN" %in% groups$zi_positive)
+  expect_true("ZAGA" %in% groups$zi_positive)
+  expect_true("ZAIG" %in% groups$zi_positive)
 })
 
 test_that("jacobian_sum computes correctly for log transform", {

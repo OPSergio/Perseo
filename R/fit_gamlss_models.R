@@ -304,7 +304,11 @@ fit_gamlss_models <- function(counts_matrix,
                               parallel = FALSE,
                               show_progress = TRUE,
                               progress_label = "Fitting features",
-                              transform_mode = "strict") {
+                              transform_mode = "strict",
+                              group_by_support = FALSE,
+                              filter_beta_inflated = TRUE,
+                              thr_zero = 0.005,
+                              thr_one = 0.005) {
   # ---- Input validation ----
   criterion <- match.arg(criterion)
   transform_mode <- match.arg(transform_mode, c("strict", "safe"))
@@ -550,6 +554,7 @@ fit_gamlss_models <- function(counts_matrix,
   .has_insufficient_variation <- has_insufficient_variation
   .is_binomial_family <- is_binomial_family
   .infer_binomial_denominator <- infer_binomial_denominator
+  .filter_candidate_families <- filter_candidate_families
   .compare_families_with_design <- compare_families_with_design
   .transform_response <- transform_response
   .instantiate_gamlss_family <- instantiate_gamlss_family
@@ -559,23 +564,43 @@ fit_gamlss_models <- function(counts_matrix,
   .wald_omnibus_test <- wald_omnibus_test
   .lrt_omnibus_test <- lrt_omnibus_test
   .apply_contrasts <- apply_contrasts
-  
+
   # ---- Worker function: process one feature ----
   process_one_feature <- function(feature_name, feature_vec, design_mat, metadata_df, prog) {
     if (!is.null(prog)) prog()
-    
+
     if (.has_insufficient_variation(feature_vec)) {
       return(NULL)
     }
-    
-    bd_vec <- if (any(.is_binomial_family(candidate_families))) {
+
+    # Per-feature support filtering: restrict families to those compatible with
+    # this feature's empirical support before computing the common mask
+    feature_families <- if (group_by_support) {
+      filtered <- .filter_candidate_families(
+        feature_vec          = feature_vec,
+        candidate_families   = candidate_families,
+        group_by_support     = TRUE,
+        filter_beta_inflated = filter_beta_inflated,
+        thr_zero             = thr_zero,
+        thr_one              = thr_one
+      )
+      filtered$families_to_test
+    } else {
+      candidate_families
+    }
+
+    if (length(feature_families) == 0) {
+      return(NULL)
+    }
+
+    bd_vec <- if (any(.is_binomial_family(feature_families))) {
       .infer_binomial_denominator(feature_vec)
     } else NULL
-    
+
     family_results <- .compare_families_with_design(
       feature_vec,
       design_mat,
-      families = candidate_families,
+      families = feature_families,
       criterion = criterion,
       gaic_k = gaic_k,
       min_n = min_n,

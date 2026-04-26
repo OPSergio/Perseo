@@ -136,6 +136,9 @@ compute_jacobian_corrected_ic <- function(fit, penalty, logJ_sum) {
   }
 
   df_fit <- fit$df.fit
+  if (is.null(df_fit) || length(df_fit) != 1L || !is.finite(df_fit)) {
+    return(Inf)
+  }
   base_ic <- (-2 * log_lik) + (penalty * df_fit)
   base_ic - (2 * logJ_sum)
 }

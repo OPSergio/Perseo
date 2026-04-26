@@ -289,9 +289,13 @@ run_perseo <- function(counts_matrix,
     omnibus = omnibus,
     omnibus_threshold = omnibus_threshold,
     omnibus_test = omnibus_test,
-    p_adjust = "none",  # We'll do global adjustment below
+    p_adjust = p_adjust_method,
     show_progress = show_progress,
-    transform_mode = family_results$transform_mode,
+    transform_mode       = family_results$transform_mode,
+    group_by_support     = group_by_support,
+    filter_beta_inflated = filter_beta_inflated,
+    thr_zero             = thr_zero,
+    thr_one              = thr_one,
     parallel = parallel,
     workers = workers
   )
@@ -301,50 +305,21 @@ run_perseo <- function(counts_matrix,
     message("\n", strrep("=", 70))
     message(" PERSEO Pipeline - Step 3: Multiple Testing Correction")
     message(strrep("=", 70))
-    message("Method: ", p_adjust_method)
-  }
-  
-  # Apply p-value adjustment globally across all features and terms
-  if (!is.null(de_results$results) && nrow(de_results$results) > 0) {
-    # Extract p-values
-    p_values <- de_results$results$pval
-    
-    # Adjust
-    p_adjusted <- stats::p.adjust(p_values, method = p_adjust_method)
-    
-    # Add to results
-    de_results$results$p_adj <- p_adjusted
-    
-    if (show_progress) {
-      n_sig_raw <- sum(p_values < 0.05, na.rm = TRUE)
-      n_sig_adj <- sum(p_adjusted < 0.05, na.rm = TRUE)
-      message(sprintf(
-        "Significant tests (p < 0.05): %d raw, %d adjusted",
-        n_sig_raw, n_sig_adj
-      ))
-    }
-  } else {
-    if (show_progress) {
+    message("Method: ", p_adjust_method, " (per-term for results, per-contrast for contrasts)")
+    if (!is.null(de_results$results) && nrow(de_results$results) > 0) {
+      n_sig_raw <- sum(de_results$results$pval  < 0.05, na.rm = TRUE)
+      n_sig_adj <- sum(de_results$results$padj  < 0.05, na.rm = TRUE)
+      message(sprintf("Significant tests (p < 0.05): %d raw, %d adjusted", n_sig_raw, n_sig_adj))
+    } else {
       message("No models fitted successfully.")
     }
-  }
-  
-  # Apply p-value adjustment to contrasts if present
-  if (!is.null(de_results$contrasts) && nrow(de_results$contrasts) > 0) {
-    p_values_contrasts <- de_results$contrasts$p_value
-    p_adjusted_contrasts <- stats::p.adjust(p_values_contrasts, method = p_adjust_method)
-    de_results$contrasts$p_adj <- p_adjusted_contrasts
-    
-    if (show_progress) {
-      n_sig_raw_c <- sum(p_values_contrasts < 0.05, na.rm = TRUE)
-      n_sig_adj_c <- sum(p_adjusted_contrasts < 0.05, na.rm = TRUE)
-      message(sprintf(
-        "Significant contrasts (p < 0.05): %d raw, %d adjusted",
-        n_sig_raw_c, n_sig_adj_c
-      ))
+    if (!is.null(de_results$contrasts) && nrow(de_results$contrasts) > 0) {
+      n_sig_raw_c <- sum(de_results$contrasts$p_value < 0.05, na.rm = TRUE)
+      n_sig_adj_c <- sum(de_results$contrasts$p_adj   < 0.05, na.rm = TRUE)
+      message(sprintf("Significant contrasts (p < 0.05): %d raw, %d adjusted", n_sig_raw_c, n_sig_adj_c))
     }
   }
-  
+
   # ---- Summary ----
   n_models_fitted <- if (!is.null(de_results$results)) {
     length(unique(de_results$results$feature))
@@ -440,8 +415,8 @@ print.perseo_results <- function(x, ...) {
     cat("\nDifferential expression results:\n")
     cat("  Total tests:", nrow(x$differential_expression$results), "\n")
     
-    if ("p_adj" %in% names(x$differential_expression$results)) {
-      n_sig <- sum(x$differential_expression$results$p_adj < 0.05, na.rm = TRUE)
+    if ("padj" %in% names(x$differential_expression$results)) {
+      n_sig <- sum(x$differential_expression$results$padj < 0.05, na.rm = TRUE)
       cat("  Significant (FDR < 0.05):", n_sig, "\n")
     }
   }

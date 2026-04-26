@@ -19,10 +19,10 @@ theme_perseo <- function(base_size = 12) {
 #' PERSEO colour palette for significance categories
 #' @keywords internal
 .perseo_sig_colours <- c(
-  "Not sig"    = "#AAAAAA",
-  "LFC only"   = "#4E9FD4",
-  "FDR only"   = "#F4A460",
-  "Sig & LFC"  = "#C0392B"
+  "Not Sig"    = "#D1D5DB",
+  "LFC only"   = "#9CA3AF",
+  "FDR only"   = "#60A5FA",
+  "Sig & LFC"  = "#0284C7"
 )
 
 #' Extract contrast tibble from a PERSEO result object
@@ -269,7 +269,7 @@ plot_ma <- function(x,
 
   df$significant <- !is.na(df$p_adj) & df$p_adj < fdr_threshold
 
-  sig_colours <- c("TRUE" = "#C0392B", "FALSE" = "#AAAAAA")
+  sig_colours <- c("TRUE" = "#0284C7", "FALSE" = "#D1D5DB")
 
   plot_title <- title %||% paste0("MA Plot — ", contrast)
   n_sig <- sum(df$significant, na.rm = TRUE)

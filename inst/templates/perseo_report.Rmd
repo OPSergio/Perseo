@@ -270,10 +270,10 @@ sidebar_html <- paste0(
 # ---- Plot helpers ----------------------------------------------------------
 
 .perseo_colours <- c(
-  not_sig  = "#AAAAAA",
-  lfc_only = "#4E9FD4",
-  fdr_only = "#F4A460",
-  sig_lfc  = "#C0392B"
+  not_sig  = "#BBBBBB",
+  lfc_only = "#888888",
+  fdr_only = "#56B4E9",
+  sig_lfc  = "#0072B2"
 )
 
 classify_colour <- function(estimate, p_adj,
@@ -358,9 +358,9 @@ h1.title { display:none; }
 .kpi-row  { display:flex; flex-wrap:wrap; gap:16px; margin:20px 0; }
 .kpi-box  { background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px;
             padding:16px 24px; min-width:140px; text-align:center; flex:1; }
-.kpi-box.kpi-sig { background:#fff3f3; border-color:#C0392B; }
+.kpi-box.kpi-sig { background:#f0f6ff; border-color:#0072B2; }
 .kpi-value { font-size:2em; font-weight:700; color:#2C3E50; line-height:1.1; }
-.kpi-sig .kpi-value { color:#C0392B; }
+.kpi-sig .kpi-value { color:#0072B2; }
 .kpi-label { font-size:0.8em; color:#666; margin-top:6px;
              text-transform:uppercase; letter-spacing:0.05em; }
 .kpi-note  { font-size:0.72em; color:#999; margin-top:5px;
@@ -376,7 +376,7 @@ h1.title { display:none; }
   font-size:0.9em; color:#2C3E50; list-style:none; user-select:none;
 }
 .perseo-info-summary::-webkit-details-marker { display:none; }
-.info-icon { color:#3498db; margin-right:4px; }
+.info-icon { color:#0072B2; margin-right:4px; }
 .perseo-info-body {
   padding:10px 16px; font-size:0.87em; color:#444;
   line-height:1.7; border-top:1px solid #b8d4e8;
@@ -420,7 +420,7 @@ h1.title { display:none; }
 .vc-val  { font-weight:700; color:#2C3E50; min-width:30px; display:inline-block; }
 .vc-note { font-size:0.82em; color:#888; font-style:italic; }
 .vc-summary { color:#555; }
-.vc-summary strong { color:#C0392B; }
+.vc-summary strong { color:#0072B2; }
 
 /* ---- Family reference table ---- */
 .family-ref-table { width:100%; border-collapse:collapse; font-size:0.85em;
@@ -450,7 +450,7 @@ h1.title { display:none; }
 /* ---- Section headings ---- */
 h1 { color:#2C3E50; border-bottom:2px solid #ecf0f1; padding-bottom:6px; }
 h2 { color:#34495E; margin-top:28px; }
-h3 { color:#34495E; border-left:4px solid #3498db;
+h3 { color:#34495E; border-left:4px solid #0072B2;
      padding-left:10px; margin-top:28px; }
 
 /* ---- ECharts chart containers ---- */
@@ -693,9 +693,9 @@ cat(info_box(
 ```{r family-barplot}
 sel_df <- de$selection
 # Shared palette for families — same order used by IC histogram.
-.fam_palette <- c("#2C6E9B","#C0392B","#27AE60","#E67E22","#8E44AD",
-                  "#16A085","#D4AC0D","#34495E","#7F8C8D","#2E86C1",
-                  "#6C5CE7","#E17055","#00B894","#FDCB6E","#0984E3")
+.fam_palette <- c("#2C3E50", "#2980B9", "#17A589", "#5D6D7E", "#5DADE2",
+                  "#48C9B0", "#34495E", "#85C1E9", "#76D7C4", "#85929E",
+                  "#1A5276", "#0E6251", "#AEB6BF", "#AED6F1", "#A3E4D7")
 .fam_colour_map <- local({
   all_fams <- if (!is.null(sel_df) && "best_family" %in% names(sel_df))
     sort(unique(sel_df$best_family)) else character(0)
@@ -707,12 +707,12 @@ if (!is.null(sel_df) && nrow(sel_df) > 0 && "best_family" %in% names(sel_df)) {
   fi_lookup <- vapply(names(.family_info), function(k) .family_info[[k]]$full,
                       character(1))
   fam_counts <- sel_df %>%
-    count(family = best_family, name = "n") %>%
+    dplyr::count(family = best_family, name = "n") %>%
     arrange(desc(n)) %>%
     mutate(
       pct    = round(n / sum(n) * 100, 1),
-      full   = unname(fi_lookup[family]),
-      colour = unname(.fam_colour_map[family])
+      full   = unname(fi_lookup[match(family, names(fi_lookup))]),
+      colour = unname(.fam_colour_map[match(family, names(.fam_colour_map))])
     )
 
   emit_chart("chart-family-bar", "family_bar",
@@ -795,7 +795,7 @@ cat(info_box(
 ```{r family-freq-table}
 if (!is.null(sel_df) && nrow(sel_df) > 0 && "best_family" %in% names(sel_df)) {
   fam_tbl <- sel_df %>%
-    count(Abbrev. = best_family, name = "Count") %>%
+    dplyr::count(Abbrev. = best_family, name = "Count") %>%
     arrange(desc(Count)) %>%
     mutate(
       Proportion = paste0(round(Count / sum(Count) * 100, 1), "%"),
@@ -1001,13 +1001,13 @@ cat(info_box(
     "The top-right and top-left corners contain the most biologically and statistically ",
     "interesting features:</p>",
     "<ul>",
-    "<li><span style='color:#C0392B;font-weight:700'>Red &mdash; Sig &amp; LFC</span>: ",
+    "<li><span style='color:#0072B2;font-weight:700'>Blue &mdash; Sig &amp; LFC</span>: ",
     "passes both the FDR and the |LFC| threshold (what you usually want).</li>",
-    "<li><span style='color:#F4A460;font-weight:700'>Orange &mdash; FDR only</span>: ",
+    "<li><span style='color:#56B4E9;font-weight:700'>Sky blue &mdash; FDR only</span>: ",
     "significant but small effect size.</li>",
-    "<li><span style='color:#4E9FD4;font-weight:700'>Blue &mdash; LFC only</span>: ",
+    "<li><span style='color:#888888;font-weight:700'>Grey &mdash; LFC only</span>: ",
     "large effect but not statistically robust.</li>",
-    "<li><span style='color:#888;font-weight:700'>Grey &mdash; Not sig</span>.</li>",
+    "<li><span style='color:#BBBBBB;font-weight:700'>Light grey &mdash; Not sig</span>.</li>",
     "</ul>",
     "<p>Move the <em>FDR</em> and <em>|LFC|</em> sliders under each volcano to ",
     "re-classify the points live (the dashed reference lines remain fixed at the ",
@@ -1330,7 +1330,7 @@ HTML(paste0(
   "use strict";
 
   /* ---- Shared constants ---- */
-  var COLOURS = { sig_lfc:"#C0392B", fdr_only:"#F4A460", lfc_only:"#4E9FD4", not_sig:"#AAAAAA" };
+  var COLOURS = { sig_lfc:"#0072B2", fdr_only:"#56B4E9", lfc_only:"#888888", not_sig:"#BBBBBB" };
   var TOOLTIP_BASE = {
     backgroundColor:"white", borderColor:"#2C3E50", borderWidth:1,
     textStyle:{ color:"#2C3E50", fontSize:12, fontFamily:"Helvetica Neue,Arial,sans-serif" },
@@ -1457,11 +1457,11 @@ HTML(paste0(
         {name:cfg.groupA,type:"boxplot",
          itemStyle:{color:"#AED6F1",borderColor:"#2980B9"},data:bA},
         {name:cfg.groupB,type:"boxplot",
-         itemStyle:{color:"#F5B7B1",borderColor:"#C0392B"},data:bB},
+         itemStyle:{color:"#A3E4D7",borderColor:"#17A589"},data:bB},
         {name:cfg.groupA+" out",type:"scatter",symbolSize:5,
          itemStyle:{color:"#2980B9"},data:oA},
         {name:cfg.groupB+" out",type:"scatter",symbolSize:5,
-         itemStyle:{color:"#C0392B"},data:oB}
+         itemStyle:{color:"#17A589"},data:oB}
       ]
     });
     return chart;
@@ -1493,9 +1493,9 @@ HTML(paste0(
   function initICHist(el, cfg) {
     var chart=echarts.init(el);
     var mids=cfg.bin_mids||[];
-    var PAL=["#2C6E9B","#C0392B","#27AE60","#E67E22","#8E44AD",
-             "#16A085","#D4AC0D","#34495E","#7F8C8D","#2E86C1",
-             "#6C5CE7","#E17055","#00B894","#FDCB6E","#0984E3"];
+    var PAL=["#2C3E50", "#2980B9", "#17A589", "#5D6D7E", "#5DADE2",
+             "#48C9B0", "#34495E", "#85C1E9", "#76D7C4", "#85929E",
+             "#1A5276", "#0E6251", "#AEB6BF", "#AED6F1", "#A3E4D7"];
     var series=(cfg.series||[]).map(function(s,i){
       return {name:s.name||s.family,type:"bar",stack:"ic",
               itemStyle:{color:s.colour||PAL[i%PAL.length]},data:s.counts}; });
@@ -1526,7 +1526,7 @@ HTML(paste0(
       yAxis:{type:"category",data:feats,axisLabel:{fontSize:10}},
       visualMap:{min:-lim,max:lim,calculable:true,orient:"vertical",
         right:5,top:"center",
-        inRange:{color:["#4E9FD4","#FFFFFF","#C0392B"]},text:["+LFC","-LFC"]},
+        inRange:{color:["#5DADE2","#FFFFFF","#2C3E50"]},text:["+LFC","-LFC"]},
       tooltip:tt({formatter:function(p){
         return "<b>"+p.data[3]+"</b><br/>"+p.data[4]
               +"<br/>LFC: "+(p.data[2]==null?"NA":Number(p.data[2]).toFixed(3))
@@ -1563,10 +1563,10 @@ HTML(paste0(
       return {x:cx,y:cy};
     }
 
-    var FILL=["#AED6F1","#A9DFBF","#FAD7A0","#D7BDE2",
-              "#FADADD","#A3E4D7","#F9E79F","#D5DBDB"];
-    var STROKE=["#2980B9","#27AE60","#E67E22","#8E44AD",
-                "#C0392B","#16A085","#D4AC0D","#7F8C8D"];
+    var FILL=["#AED6F1","#A3E4D7","#D5DBDB","#85C1E9",
+              "#A9DFBF","#D6EAF8","#E5E8E8","#A2D9CE"];
+    var STROKE=["#2980B9","#17A589","#7F8C8D","#2471A3",
+                "#27AE60","#3498DB","#AEB6BF","#1ABC9C"];
 
     var circles=sets.map(function(s,i){
       return '<circle cx="'+CX[i]+'" cy="'+CY[i]+'" r="'+R+'"'
@@ -1616,8 +1616,8 @@ HTML(paste0(
       return (pat || "").split("").map(Number);
     }
 
-    var SET_COLS = ["#2C6E9B","#C0392B","#27AE60","#E67E22","#8E44AD",
-                    "#16A085","#D4AC0D","#34495E","#7F8C8D","#2E86C1"];
+    var SET_COLS = ["#2980B9", "#17A589", "#7F8C8D", "#2471A3", "#27AE60",
+                    "#3498DB", "#AEB6BF", "#1ABC9C", "#34495E", "#5DADE2"];
 
     var BAR_H   = 200;
     var DOT_ROW = 26;

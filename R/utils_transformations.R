@@ -329,10 +329,11 @@ transform_for_family_strict <- function(y, fam, eps = 1e-6, allow_eps = TRUE) {
     allow_zero <- fam %in% c("BEINF", "BEZI", "BEINF0")
     allow_one  <- fam %in% c("BEINF", "BEo", "BEINF0")
 
-    if (allow_eps) {
-      if (!allow_zero) z_all[z_all <= 0] <- eps
-      if (!allow_one)  z_all[z_all >= 1] <- 1 - eps
-    }
+    # Minmax always maps the data minimum to 0 and maximum to 1, so boundary
+    # values at exactly 0 or 1 are an artifact of the transform, not invalid
+    # data. Nudge unconditionally to keep those samples in strict mode.
+    if (!allow_zero) z_all[z_all <= 0] <- eps
+    if (!allow_one)  z_all[z_all >= 1] <- 1 - eps
 
     mask <- is.finite(z_all)
     mask <- mask & if (allow_zero) z_all >= 0 else z_all > 0

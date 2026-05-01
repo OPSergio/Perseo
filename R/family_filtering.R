@@ -43,7 +43,16 @@ filter_candidate_families <- function(feature_vec,
   # Support-based filtering (preserves group_by_support = FALSE)
   if (isTRUE(group_by_support)) {
     groups <- family_groups()
-    eligible_families <- intersect(eligible_families, groups[[support]])
+    if (support == "zi_positive") {
+      # Include both ZI families and regular positive families: let IC decide
+      # whether modeling zero-inflation is worth the extra parameters
+      eligible_families <- intersect(
+        eligible_families,
+        c(groups[["zi_positive"]], groups[["positive"]])
+      )
+    } else {
+      eligible_families <- intersect(eligible_families, groups[[support]])
+    }
   }
 
   # Beta inflation filtering (applies regardless of group_by_support)

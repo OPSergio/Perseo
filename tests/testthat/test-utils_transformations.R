@@ -78,12 +78,32 @@ test_that("transform_for_family_strict handles positive families correctly", {
 
 test_that("transform_for_family_strict handles unit families correctly", {
   unit_data <- c(0.1, 0.3, 0.5, 0.7, 0.9)
-  
+
   # Beta
   tr_be <- transform_for_family_strict(unit_data, "BE")
   expect_true(all(tr_be$y > 0 & tr_be$y < 1))
   expect_true(all(tr_be$mask))
   expect_true(is.finite(sum(tr_be$logJ_per_obs)))
+})
+
+test_that("transform_for_family_strict keeps zero samples for BE via unconditional eps nudge", {
+  # Minmax maps min→0, max→1; for BE the min sample must not be excluded
+  unit_with_zeros <- c(0, 0.2, 0.5, 0.8, 1.0)
+
+  # Default allow_eps=TRUE
+  tr_be <- transform_for_family_strict(unit_with_zeros, "BE")
+  expect_true(all(tr_be$mask), info = "All samples must be valid for BE with zeros")
+  expect_true(all(tr_be$y > 0 & tr_be$y < 1), info = "All transformed values must be in open (0,1)")
+
+  # Explicit allow_eps=FALSE: eps must still be applied for unit families
+  tr_be_noeps <- transform_for_family_strict(unit_with_zeros, "BE", allow_eps = FALSE)
+  expect_true(all(tr_be_noeps$mask), info = "Zeros must not be excluded even with allow_eps=FALSE for unit families")
+  expect_true(all(tr_be_noeps$y > 0 & tr_be_noeps$y < 1))
+
+  # BEO (allows ones, not zeros): zero sample must also be kept
+  tr_beo <- transform_for_family_strict(unit_with_zeros, "BEO")
+  expect_true(all(tr_beo$mask))
+  expect_true(all(tr_beo$y > 0 & tr_beo$y <= 1))
 })
 
 test_that("transform_for_family_strict handles real families correctly", {

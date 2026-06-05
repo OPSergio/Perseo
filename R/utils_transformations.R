@@ -409,11 +409,18 @@ inverse_transform <- function(z, meta) {
 #' @export
 family_groups <- function() {
   list(
+<<<<<<< HEAD
     count       = c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG"),
     unit        = c("BE","BEINF","BEO","BEZI","BEo","BEINF0"),
     positive    = c("GA","GG","LOGNO","IG","WEI"),
     zi_positive = c("ZILN","ZAGA","ZAIG"),
     real        = c("NO","TF","GU")
+=======
+    count    = c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB"),
+    unit     = c("BE","BEINF","BEO","BEZI","BEo","BEINF0"),
+    positive = c("GA","GG","LOGNO","IG","NO","TF","GU"),
+    real     = c("NO","TF","GU")
+>>>>>>> d994ef6 (Added NO TF and GU to positive domain)
   )
 }
 

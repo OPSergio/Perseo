@@ -55,16 +55,28 @@ filter_candidate_families <- function(feature_vec,
     }
   }
 
-  # Beta inflation filtering (applies regardless of group_by_support)
-  if (filter_beta_inflated && identical(support, "unit") && length(eligible_families) > 0) {
+  # ZI/ZA inflation filtering (applies regardless of group_by_support)
+  if (filter_beta_inflated && length(eligible_families) > 0) {
     y_finite <- y[is.finite(y)]
     if (length(y_finite) > 0) {
       p_zero <- mean(y_finite == 0)
-      p_one <- mean(y_finite == 1)
-      
-      if (!is.na(p_zero) && !is.na(p_one) && p_zero < thr_zero && p_one < thr_one) {
-        inflated_beta <- c("BEINF", "BEZI", "BEINF0", "BEO", "BEo")
-        eligible_families <- setdiff(eligible_families, inflated_beta)
+      p_one  <- mean(y_finite == 1)
+
+      # Unit support: drop inflated beta when no 0/1 evidence
+      if (identical(support, "unit") && !is.na(p_zero) && !is.na(p_one) &&
+          p_zero < thr_zero && p_one < thr_one) {
+        eligible_families <- setdiff(eligible_families,
+                                     c("BEINF", "BEZI", "BEINF0", "BEO", "BEo"))
+      }
+
+      # Count support: drop ZIP/ZINBI when no zero-inflation evidence
+      if (identical(support, "count") && !is.na(p_zero) && p_zero < thr_zero) {
+        eligible_families <- setdiff(eligible_families, c("ZIP", "ZINBI", "ZIP2"))
+      }
+
+      # Positive support: drop ZAIG/ZAGA when no zero-augmentation evidence
+      if (identical(support, "positive") && !is.na(p_zero) && p_zero < thr_zero) {
+        eligible_families <- setdiff(eligible_families, c("ZAIG", "ZAGA"))
       }
     }
   }

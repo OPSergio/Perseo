@@ -129,7 +129,7 @@ test_that("filter_candidate_families returns all families for constant when grou
 test_that("filter_candidate_families with zi_positive support includes both ZI and positive families", {
   # Data with zeros + positive non-integer values → zi_positive support
   zi_data <- c(0, 0, 1.5, 3.2, 0, 8.7, 15.1)
-  all_families <- c("ZILN", "ZAGA", "ZAIG", "GA", "LOGNO", "IG", "WEI", "NO")
+  all_families <- c("ZILN", "ZAGA", "ZAIG", "GA", "LOGNO", "IG", "NO")
 
   filtered <- filter_candidate_families(
     zi_data,
@@ -143,7 +143,7 @@ test_that("filter_candidate_families with zi_positive support includes both ZI a
   expect_true(any(c("ZILN", "ZAGA", "ZAIG") %in% filtered$families_to_test))
 
   # Must also include regular positive families to let IC decide
-  expect_true(any(c("GA", "LOGNO", "IG", "WEI") %in% filtered$families_to_test))
+  expect_true(any(c("GA", "LOGNO", "IG") %in% filtered$families_to_test))
 
   # Must NOT include real-valued families (NO)
   expect_false("NO" %in% filtered$families_to_test)

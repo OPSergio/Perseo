@@ -91,7 +91,7 @@ default_candidate_families <- function() {
     # Counts (including zero-inflated and binomial)
     "PO", "NBI", "ZIP", "ZINBI", "BI", "BB", "PIG",
     # Positive continuous
-    "GA", "GG", "IG", "LOGNO", "WEI",
+    "GA", "GG", "IG", "LOGNO",
     # Zero-inflated positive continuous
     "ZILN", "ZAGA", "ZAIG",
     # Real-valued

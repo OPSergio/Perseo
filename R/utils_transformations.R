@@ -60,7 +60,7 @@ transform_response <- function(y, fam, mode = c("strict", "safe"), eps = 1e-6, a
   
   fam_count       <- c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG")
   fam_unit        <- c("BE","BEINF","BEO","BEZI","BEo","BEINF0")
-  fam_positive    <- c("GA","GG","LOGNO","IG","WEI")
+  fam_positive    <- c("GA","GG","LOGNO","IG")
   fam_zi_positive <- c("ZILN","ZAGA","ZAIG")
   fam_real        <- c("NO","TF","GU")
 
@@ -186,8 +186,8 @@ transform_for_family <- function(y, fam, strategy = "safe", eps = 1e-6) {
     return(y)
   }
 
-  # A: (0, ∞) – strictly positive continuous (GA, GG, LOGNO, IG, WEI)
-  if (fam %in% c("GA", "GG", "LOGNO", "IG", "WEI")) {
+  # A: (0, ∞) – strictly positive continuous (GA, GG, LOGNO, IG)
+  if (fam %in% c("GA", "GG", "LOGNO", "IG")) {
     if (strategy == "safe") {
       y[y <= 0] <- eps
     } else {
@@ -266,7 +266,7 @@ transform_for_family_strict <- function(y, fam, eps = 1e-6, allow_eps = TRUE) {
 
   fam_count       <- c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG")
   fam_unit        <- c("BE","BEINF","BEO","BEZI","BEo","BEINF0")
-  fam_positive    <- c("GA","GG","LOGNO","IG","WEI")
+  fam_positive    <- c("GA","GG","LOGNO","IG")
   fam_zi_positive <- c("ZILN","ZAGA","ZAIG")
   fam_real        <- c("NO","TF","GU")
 
@@ -411,7 +411,7 @@ family_groups <- function() {
   list(
     count       = c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG"),
     unit        = c("BE","BEINF","BEO","BEZI","BEo","BEINF0"),
-    positive    = c("GA","GG","LOGNO","IG","WEI","NO","TF","GU"),
+    positive    = c("GA","GG","LOGNO","IG","NO","TF","GU"),
     zi_positive = c("ZILN","ZAGA","ZAIG"),
     real        = c("NO","TF","GU")
   )

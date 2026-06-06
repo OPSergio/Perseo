@@ -615,7 +615,8 @@ fit_gamlss_models <- function(counts_matrix,
       return(NULL)
     }
     
-    best <- dplyr::slice_min(family_results$comparisons, ic_value, with_ties = FALSE)
+    cmp <- family_results$comparisons
+    best <- cmp[select_by_ic_gof(cmp$ic_value, cmp$gof), ]
     
     # Extract coefficient table
     coef_df <- tibble::tibble(

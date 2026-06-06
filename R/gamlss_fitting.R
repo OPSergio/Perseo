@@ -144,6 +144,27 @@ compute_jacobian_corrected_ic <- function(fit, penalty, logJ_sum) {
 }
 
 
+#' Filliben correlation of the normalized quantile residuals (higher = better fit).
+#' @keywords internal
+gof_score <- function(fit) {
+  r <- tryCatch(as.numeric(fit$residuals), error = function(e) NULL)
+  if (is.null(r) || length(r) < 5L || any(!is.finite(r))) return(-Inf)
+  q <- stats::qnorm(stats::ppoints(length(r)))
+  suppressWarnings(stats::cor(sort(r), q))
+}
+
+
+#' Index of the minimum-IC family, breaking near-ties (IC within `delta`) by best GoF.
+#' @keywords internal
+select_by_ic_gof <- function(ic_values, gof_values, delta = 2) {
+  valid <- which(is.finite(ic_values))
+  if (length(valid) == 0L) return(NA_integer_)
+  cand <- valid[ic_values[valid] <= min(ic_values[valid]) + delta]
+  if (length(cand) == 1L) return(cand)
+  cand[which.max(gof_values[cand])]
+}
+
+
 #' Extract coefficient table from GAMLSS fit for mu parameter
 #'
 #' Robustly extracts coefficient estimates, standard errors, test statistics,

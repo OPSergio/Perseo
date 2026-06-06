@@ -78,6 +78,17 @@ filter_candidate_families <- function(feature_vec,
       if (identical(support, "positive") && !is.na(p_zero) && p_zero < thr_zero) {
         eligible_families <- setdiff(eligible_families, c("ZAIG", "ZAGA"))
       }
+
+      # Zi-positive support with MATERIAL zeros: a continuous positive family
+      # cannot represent a point mass at 0 — it only "fits" the zeros via the
+      # epsilon-nudge, which lets a J-shaped Gamma absorb structural zeros and
+      # beat the (more-parameterised) zero-adjusted family on IC. Restrict to the
+      # zero-adjusted families so the zero process is modelled, not cheated.
+      if (identical(support, "zi_positive") && !is.na(p_zero) && p_zero >= thr_zero) {
+        za_families <- family_groups()[["zi_positive"]]
+        keep_za <- intersect(eligible_families, za_families)
+        if (length(keep_za) > 0) eligible_families <- keep_za
+      }
     }
   }
 

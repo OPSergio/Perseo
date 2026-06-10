@@ -89,8 +89,10 @@ test_that("filter_candidate_families with group_by_support=TRUE filters by suppo
     group_by_support = TRUE
   )
   
-  # Should only return positive families (GA, LOGNO)
-  expect_true(all(filtered_positive$families_to_test %in% c("GA", "LOGNO", "IG", "GG")))
+  # Positive support drops count families (PO) but, by design, real-valued
+  # families (NO/TF/GU) also compete on positive data and the IC decides.
+  expect_false("PO" %in% filtered_positive$families_to_test)
+  expect_setequal(filtered_positive$families_to_test, c("GA", "LOGNO", "NO"))
 })
 
 test_that("filter_candidate_families handles binomial families", {
@@ -126,8 +128,12 @@ test_that("filter_candidate_families returns all families for constant when grou
   expect_equal(sort(filtered$families_to_test), sort(families))
 })
 
-test_that("filter_candidate_families with zi_positive support includes both ZI and positive families", {
-  # Data with zeros + positive non-integer values → zi_positive support
+test_that("filter_candidate_families with MATERIAL zeros restricts zi_positive to zero-adjusted families", {
+  # Data with zeros + positive non-integer values → zi_positive support.
+  # Here zeros are material (p_zero >> thr_zero), so a positive continuous
+  # family would only "fit" the zeros through the epsilon-nudge (the nudge
+  # hides the zeros). To prevent that cheat, candidates are restricted to the
+  # zero-adjusted families that model the zero process explicitly.
   zi_data <- c(0, 0, 1.5, 3.2, 0, 8.7, 15.1)
   all_families <- c("ZILN", "ZAGA", "ZAIG", "GA", "LOGNO", "IG", "NO")
 
@@ -139,11 +145,11 @@ test_that("filter_candidate_families with zi_positive support includes both ZI a
 
   expect_equal(filtered$support, "zi_positive")
 
-  # Must include ZI families
-  expect_true(any(c("ZILN", "ZAGA", "ZAIG") %in% filtered$families_to_test))
+  # Only zero-adjusted families survive material zeros
+  expect_setequal(filtered$families_to_test, c("ZILN", "ZAGA", "ZAIG"))
 
-  # Must also include regular positive families to let IC decide
-  expect_true(any(c("GA", "LOGNO", "IG") %in% filtered$families_to_test))
+  # Positive continuous families are dropped (they would cheat via the nudge)
+  expect_false(any(c("GA", "LOGNO", "IG") %in% filtered$families_to_test))
 
   # Must NOT include real-valued families (NO)
   expect_false("NO" %in% filtered$families_to_test)

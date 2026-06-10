@@ -289,7 +289,7 @@ test_that("PERSEO end-to-end workflow on realistic synthetic omics data", {
   per_feature_p <- condition_terms |>
     dplyr::group_by(.data$feature) |>
     dplyr::summarise(p = min(.data$pval, na.rm = TRUE),
-                     padj = min(.data$p_adj, na.rm = TRUE),
+                     padj = min(.data$padj, na.rm = TRUE),
                      .groups = "drop")
 
   # Attach truth

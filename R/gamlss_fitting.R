@@ -175,15 +175,23 @@ select_by_ic_gof <- function(ic_values, gof_values, delta = 2) {
 #'
 #' @param fit A fitted `gamlss` object.
 #' @return Square covariance matrix (named) or NULL if components are missing.
+#'
+#' @details When the design is rank-deficient (e.g. a group whose response is
+#'   constant or all-zero), \eqn{X^\top W X} is singular and `solve()` fails. In
+#'   that case we fall back to the Moore-Penrose pseudo-inverse (`MASS::ginv`),
+#'   so SEs stay finite and `summary()` path is avoided. For
+#'   aliased coefficients the resulting SE is the minimum-norm one, not OLS.
 #' @keywords internal
 mu_vcov_robust <- function(fit) {
   X <- tryCatch(fit$mu.x,  error = function(e) NULL)
   w <- tryCatch(fit$mu.wt, error = function(e) NULL)
   if (is.null(X) || is.null(w) || !is.matrix(X) || length(w) != nrow(X)) return(NULL)
-  V <- tryCatch(solve(t(X) %*% (X * w)), error = function(e) NULL)
+  XtWX <- t(X) %*% (X * w)
+  V <- tryCatch(solve(XtWX), error = function(e) NULL)
+  if (is.null(V)) V <- tryCatch(MASS::ginv(XtWX), error = function(e) NULL)  # singular -> pseudo-inverse
   if (is.null(V)) return(NULL)
   nm <- colnames(X)
-  if (!is.null(nm) && length(nm) == ncol(V)) rownames(V) <- colnames(V) <- nm
+  if (!is.null(nm) && length(nm) == ncol(V)) rownames(V) <- colnames(V) <- nm  # ginv drops dimnames
   V
 }
 

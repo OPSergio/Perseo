@@ -29,6 +29,7 @@ Imports:
     tibble (>= 3.0.0),
     rlang (>= 1.0.0),
     ggplot2 (>= 3.4.0),
+    MASS,
     stats,
     utils,
     progressr

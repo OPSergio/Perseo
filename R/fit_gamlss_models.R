@@ -615,7 +615,8 @@ fit_gamlss_models <- function(counts_matrix,
       return(NULL)
     }
     
-    best <- dplyr::slice_min(family_results$comparisons, ic_value, with_ties = FALSE)
+    cmp <- family_results$comparisons
+    best <- cmp[select_by_ic_gof(cmp$ic_value, cmp$gof), ]
     
     # Extract coefficient table
     coef_df <- tibble::tibble(
@@ -666,8 +667,15 @@ fit_gamlss_models <- function(counts_matrix,
           family_obj <- fam_obj
         }
         
-        V <- tryCatch({ vcov(best_fit, what = "mu") }, error = function(e) NULL)
-        
+        # Robust (X'WX)^-1 first: full mu covariance incl. off-diagonals, which
+        # arbitrary (>2-group) contrasts need. vcov.gamlss fails in this scope
+        # and the diagonal-only fallback below mis-states non-reference contrasts.
+        V <- mu_vcov_robust(best_fit)
+
+        if (is.null(V)) {
+          V <- tryCatch({ vcov(best_fit, what = "mu") }, error = function(e) NULL)
+        }
+
         if (is.null(V)) {
           V <- tryCatch({
             suppressWarnings({

@@ -144,20 +144,91 @@ compute_jacobian_corrected_ic <- function(fit, penalty, logJ_sum) {
 }
 
 
+#' Filliben correlation of the normalized quantile residuals (higher = better fit).
+#' @keywords internal
+gof_score <- function(fit) {
+  r <- tryCatch(as.numeric(fit$residuals), error = function(e) NULL)
+  if (is.null(r) || length(r) < 5L || any(!is.finite(r))) return(-Inf)
+  q <- stats::qnorm(stats::ppoints(length(r)))
+  suppressWarnings(stats::cor(sort(r), q))
+}
+
+
+#' Index of the minimum-IC family, breaking near-ties (IC within `delta`) by best GoF.
+#' @keywords internal
+select_by_ic_gof <- function(ic_values, gof_values, delta = 2) {
+  valid <- which(is.finite(ic_values))
+  if (length(valid) == 0L) return(NA_integer_)
+  cand <- valid[ic_values[valid] <= min(ic_values[valid]) + delta]
+  if (length(cand) == 1L) return(cand)
+  cand[which.max(gof_values[cand])]
+}
+
+
+#' Robust covariance of the mu coefficients
+#'
+#' Computes \eqn{(X^\top W X)^{-1}} directly from the fitted object's mu design
+#' matrix and IRLS working weights. This reproduces the GAMLSS Wald covariance
+#' exactly but, unlike `vcov.gamlss()`, never reconstructs the model via
+#' `get()` on the data/family names, so it works inside any function or
+#' parallel worker (where those names are out of scope).
+#'
+#' @param fit A fitted `gamlss` object.
+#' @return Square covariance matrix (named) or NULL if components are missing.
+#'
+#' @details When the design is rank-deficient (e.g. a group whose response is
+#'   constant or all-zero), \eqn{X^\top W X} is singular and `solve()` fails. In
+#'   that case we fall back to the Moore-Penrose pseudo-inverse (`MASS::ginv`),
+#'   so SEs stay finite and `summary()` path is avoided. For
+#'   aliased coefficients the resulting SE is the minimum-norm one, not OLS.
+#' @keywords internal
+mu_vcov_robust <- function(fit) {
+  X <- tryCatch(fit$mu.x,  error = function(e) NULL)
+  w <- tryCatch(fit$mu.wt, error = function(e) NULL)
+  if (is.null(X) || is.null(w) || !is.matrix(X) || length(w) != nrow(X)) return(NULL)
+  XtWX <- t(X) %*% (X * w)
+  V <- tryCatch(solve(XtWX), error = function(e) NULL)
+  if (is.null(V)) V <- tryCatch(MASS::ginv(XtWX), error = function(e) NULL)  # singular -> pseudo-inverse
+  if (is.null(V)) return(NULL)
+  nm <- colnames(X)
+  if (!is.null(nm) && length(nm) == ncol(V)) rownames(V) <- colnames(V) <- nm  # ginv drops dimnames
+  V
+}
+
 #' Extract coefficient table from GAMLSS fit for mu parameter
 #'
-#' Robustly extracts coefficient estimates, standard errors, test statistics,
-#' and p-values from `summary(fit, what = "mu")` output. Handles various
-#' return structures from different GAMLSS versions.
+#' Primary path: mu coefficients from `coef()` plus the robust
+#' \eqn{(X^\top W X)^{-1}} covariance (scope-safe). Falls back to parsing
+#' `summary(fit, what = "mu")` (with t-derived p-values) only when the robust
+#' covariance cannot be built.
 #'
 #' @param fit A fitted `gamlss` object.
 #'
 #' @return Tibble with columns: term, effect, se, stat, pval.
 #' @keywords internal
 extract_mu_coefficients <- function(fit) {
-  # Get summary output while suppressing output
+  # Primary path: coef + robust covariance, computed straight from the fit.
+  beta <- tryCatch(coef(fit, what = "mu"), error = function(e) NULL)
+  V    <- mu_vcov_robust(fit)
+  if (!is.null(beta) && !is.null(V) && nrow(V) == length(beta)) {
+    df_res <- suppressWarnings(tryCatch(fit$df.residual, error = function(e) NULL))
+    se <- sqrt(diag(V))
+    tv <- as.numeric(beta) / se
+    pv <- if (!is.null(df_res) && length(df_res) == 1 &&
+              is.finite(df_res) && df_res > 0) {
+      2 * stats::pt(-abs(tv), df_res)
+    } else {
+      2 * stats::pnorm(-abs(tv))
+    }
+    return(tibble::tibble(
+      term = names(beta), effect = as.numeric(beta),
+      se = se, stat = tv, pval = pv
+    ))
+  }
+
+  # Fallback: parse summary() output (kept as a safety net).
   summary_obj <- NULL
-  
+
   dummy <- capture.output({
     summary_obj <- suppressWarnings(suppressMessages({
       summary(fit, what = "mu")
@@ -207,13 +278,29 @@ extract_mu_coefficients <- function(fit) {
     term_names <- gsub("^\\.|\\.$", "", term_names)  # Remove leading/trailing dots again
     term_names <- ifelse(grepl("^Intercept", term_names, ignore.case = TRUE), "(Intercept)", term_names)
     
-    tibble::tibble(
+    out <- tibble::tibble(
       term = term_names,
       effect = as.numeric(tab[["Estimate"]]),
       se = as.numeric(tab[["Std. Error"]]),
       stat = as.numeric(tab[["t value"]]),
       pval = as.numeric(tab[["Pr(>|t|)"]])
     )
+
+    # One-parameter families (e.g. PO) lose the Pr(>|t|) column when gamlss
+    # falls back to the qr summary; the SE stays valid, so derive p from t.
+    fill <- is.na(out$pval) & is.finite(out$se) & out$se > 0 & is.finite(out$effect)
+    if (any(fill)) {
+      df_res <- suppressWarnings(tryCatch(fit$df.residual, error = function(e) NULL))
+      tv <- out$effect / out$se
+      out$stat[fill] <- tv[fill]
+      out$pval[fill] <- if (!is.null(df_res) && length(df_res) == 1 &&
+                            is.finite(df_res) && df_res > 0) {
+        2 * stats::pt(-abs(tv[fill]), df_res)
+      } else {
+        2 * stats::pnorm(-abs(tv[fill]))
+      }
+    }
+    out
   }
 
   # Try data.frame/matrix format

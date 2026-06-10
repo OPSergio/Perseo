@@ -195,6 +195,79 @@ test_that("extract_mu_coefficients returns tibble with correct columns", {
   }
 })
 
+test_that("mu_vcov_robust falls back to pseudo-inverse on singular X'WX", {
+  # Two identical columns (gB == gC) make X'WX singular: solve() must fail and
+  # mu_vcov_robust() must recover via MASS::ginv() instead of returning NULL.
+  X <- cbind(`(Intercept)` = 1, gB = c(0, 0, 1, 1), gC = c(0, 0, 1, 1))
+  w <- rep(1, 4)
+  XtWX <- t(X) %*% (X * w)
+
+  expect_error(solve(XtWX))  # genuinely singular
+
+  V <- mu_vcov_robust(list(mu.x = X, mu.wt = w))
+  expect_true(is.matrix(V))
+  expect_equal(dim(V), c(3L, 3L))
+  expect_true(all(is.finite(V)))
+  expect_equal(colnames(V), colnames(X))
+})
+
+test_that("mu_vcov_robust matches solve() on full-rank designs", {
+  set.seed(1)
+  X <- cbind(`(Intercept)` = 1, gB = rep(0:1, each = 5), x = rnorm(10))
+  w <- runif(10, 0.5, 1.5)
+  V_solve <- solve(t(X) %*% (X * w))
+  V_rob   <- mu_vcov_robust(list(mu.x = X, mu.wt = w))
+  expect_equal(unname(V_rob), unname(V_solve), tolerance = 1e-8)
+})
+
+test_that("extract_mu_coefficients gives finite SE/p for a 2-group contrast", {
+  skip_if_not_installed("gamlss")
+  skip_if_not_installed("gamlss.dist")
+
+  set.seed(42)
+  g <- factor(rep(c("A", "B"), each = 30))
+  y <- rnorm(60, 100, 15) + ifelse(g == "B", 18, 0)
+  fit <- fit_gamlss_safely(y ~ g, data.frame(y = y, g = g),
+                           instantiate_gamlss_family("NO"))
+  skip_if(is.null(fit))
+
+  ct <- extract_mu_coefficients(fit)
+  gb <- ct[ct$term == "gB", ]
+  expect_equal(nrow(gb), 1L)
+  expect_true(is.finite(gb$se) && gb$se > 0)
+  expect_true(is.finite(gb$pval))
+})
+
+test_that("apply_contrasts yields finite A-B / A-C / B-C with robust vcov (3 groups)", {
+  skip_if_not_installed("gamlss")
+  skip_if_not_installed("gamlss.dist")
+
+  set.seed(7)
+  g <- factor(rep(c("A", "B", "C"), each = 30))
+  y <- rnorm(90, 100, 15) * c(A = 1, B = 1.4, C = 2.0)[as.character(g)]
+  d <- data.frame(y = y, g = g)
+  fit <- fit_gamlss_safely(y ~ g, d, instantiate_gamlss_family("NO"))
+  skip_if(is.null(fit))
+
+  beta <- coef(fit, what = "mu")
+  V    <- mu_vcov_robust(fit)
+  expect_false(is.null(V))
+
+  design <- matrix(0, nrow = 1, ncol = length(beta),
+                   dimnames = list(NULL, names(beta)))
+  C   <- build_contrast_matrix("g", d, design)
+  res <- apply_contrasts(beta, V, C)
+
+  expect_true(all(c("B_vs_A", "C_vs_A", "C_vs_B") %in% res$contrast))
+  expect_true(all(is.finite(res$se)) && all(res$se > 0))
+  expect_true(all(is.finite(res$p_value)))
+
+  # Estimates are additive: C-A == (B-A) + (C-B)
+  est <- setNames(res$estimate, res$contrast)
+  expect_equal(unname(est["C_vs_A"]),
+               unname(est["B_vs_A"] + est["C_vs_B"]), tolerance = 1e-6)
+})
+
 test_that("extract_mu_coefficients handles intercept-only models", {
   skip_if_not_installed("gamlss")
   skip_if_not_installed("gamlss.dist")

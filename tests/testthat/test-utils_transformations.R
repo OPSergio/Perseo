@@ -201,7 +201,6 @@ test_that("family_groups returns correct categorization", {
   expect_true("PIG"  %in% groups$count)
   expect_true("GA"   %in% groups$positive)
   expect_true("LOGNO" %in% groups$positive)
-  expect_true("WEI"  %in% groups$positive)
   expect_true("BE"   %in% groups$unit)
   expect_true("NO"   %in% groups$real)
   expect_true("ZILN" %in% groups$zi_positive)

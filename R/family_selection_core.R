@@ -158,9 +158,10 @@ compare_families_on_feature <- function(feature_vec,
     }
   })
   
-  # Select best family (minimum IC among valid)
-  best_idx <- which.min(ic_values)
-  best_family <- if (length(best_idx) > 0 && is.finite(ic_values[best_idx])) {
+  # Select best family (minimum IC, near-ties broken by goodness of fit)
+  gof_values <- vapply(fits, function(f) if (is.null(f)) -Inf else gof_score(f), numeric(1))
+  best_idx <- select_by_ic_gof(ic_values, gof_values)
+  best_family <- if (length(best_idx) > 0 && !is.na(best_idx) && is.finite(ic_values[best_idx])) {
     effective_families[best_idx]
   } else {
     NA_character_
@@ -334,11 +335,14 @@ compare_families_with_design <- function(feature_vec,
       tibble::tibble(term = character(), effect = numeric(), se = numeric(), stat = numeric(), pval = numeric())
     }
   })
-  
+
+  gof_values <- vapply(fits, function(f) if (is.null(f)) -Inf else gof_score(f), numeric(1))
+
   list(
     comparisons = tibble::tibble(
       family = candidate_families,
       ic_value = ic_values,
+      gof = gof_values,
       n_valid_obs = rep(as.integer(n_valid), length(candidate_families)),
       coef_tbl = coef_tbls
     )

@@ -73,7 +73,20 @@ fit_gamlss_safely <- function(formula, data, family_obj) {
   tryCatch({
     # Store family_obj BEFORE calling gamlss so it's in scope
     family_obj_stored <- family_obj
-    
+
+    # Make gamlss additive-term functions (random(), re(), pb(), ...) resolvable
+    # in the formula even when gamlss is not attached.
+    if (inherits(formula, "formula")) {
+      fenv <- new.env(parent = environment(formula))
+      gns  <- asNamespace("gamlss")
+      for (sf in c("random", "re", "pb", "pbo", "pbm", "cs", "scs", "lo", "ga",
+                   "fp", "ri", "nn", "pvc", "pcat", "cy")) {
+        if (exists(sf, envir = gns, inherits = FALSE))
+          assign(sf, get(sf, envir = gns), envir = fenv)
+      }
+      environment(formula) <- fenv
+    }
+
     # Suppress all GAMLSS output using capture.output
     fit_result <- NULL
     dummy <- capture.output({

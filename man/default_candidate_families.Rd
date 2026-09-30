@@ -7,10 +7,11 @@
 default_candidate_families()
 }
 \value{
-Character vector with 18 family names.
+Character vector with 21 family names.
 }
 \description{
 Returns the standard set of families used when user does not provide a
-custom list. Includes count, unit, positive, and real-valued distributions.
+custom list. Includes count, unit, positive, zero-inflated positive, and
+real-valued distributions.
 }
 \keyword{internal}

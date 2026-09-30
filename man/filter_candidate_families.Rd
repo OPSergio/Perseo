@@ -18,9 +18,11 @@ filter_candidate_families(
 matching the empirical support inferred from `y`. If FALSE, all families
 in `families` are retained (subject only to beta inflation filtering).}
 
-\item{filter_beta_inflated}{Logical; if TRUE and support is "unit", removes
-inflated beta families (BEINF, BEZI, etc.) when there is insufficient
-evidence of zero/one inflation.}
+\item{filter_beta_inflated}{Logical; if TRUE and support is "unit", keeps
+only the beta families whose point masses match the observed exact 0/1:
+BE/BEo without 0/1, BEZI/BEINF0 with zeros, BEINF1 with ones, BEINF with
+both. Also applies the analogous zero-inflation rules to count, positive
+and zi_positive support.}
 
 \item{thr_zero}{Numeric threshold for declaring zero inflation (proportion
 of exact zeros required).}

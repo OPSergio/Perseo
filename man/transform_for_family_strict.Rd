@@ -32,8 +32,10 @@ Also includes metadata to invert the transformation.
 Families:
 - Counts: \code{PO, NBI, ZIP, ZINBI, ZIP2, BI, BB} → identity (valid if integer ≥ 0)
 - Positive: \code{GA, GG, LOGNO, IG} → identity (valid if y > 0)
-- Unit interval and inflated: \code{BE, BEINF, BEO, BEZI, BEo, BEINF0}
-    → min–max to (0,1), Jacobian \eqn{-\log(b-a)}, validity depends on inflation
+- Unit interval and inflated: \code{BE, BEINF, BEZI, BEo, BEINF0, BEINF1}
+    → identity; valid in (0,1), plus exact 0 for \code{BEINF, BEZI, BEINF0}
+    and exact 1 for \code{BEINF, BEINF1}. With \code{allow_eps = TRUE},
+    unsupported exact 0/1 are nudged by \code{eps}; otherwise they are masked.
 - Real: \code{NO, TF, GU} → z-score standardization with sd > 0,
     Jacobian \eqn{-\log(sd)}.
 }

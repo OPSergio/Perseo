@@ -82,18 +82,20 @@ validate_criterion_args <- function(criterion, gaic_k = NULL) {
 #' custom list. Includes count, unit, positive, zero-inflated positive, and
 #' real-valued distributions.
 #'
-#' @return Character vector with 24 family names.
+#' @return Character vector with 21 family names.
 #' @keywords internal
 default_candidate_families <- function() {
   c(
-    # Unit interval (plain + inflated)
-    "BE", "BEO", "BEINF", "BEZI", "BEo", "BEINF0",
+    # Unit interval (plain + inflated). BEo is left out on purpose: it is the
+    # same distribution as BE (identical IC) but its mu is a shape parameter,
+    # not the mean, so a tie-break win would change the effect's meaning.
+    "BE", "BEINF", "BEZI", "BEINF0", "BEINF1",
     # Counts (including zero-inflated and binomial)
     "PO", "NBI", "ZIP", "ZINBI", "BI", "BB", "PIG",
     # Positive continuous
     "GA", "GG", "IG", "LOGNO",
     # Zero-inflated positive continuous
-    "ZILN", "ZAGA", "ZAIG",
+    "ZAGA", "ZAIG",
     # Real-valued
     "NO", "TF", "GU"
   )

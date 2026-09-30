@@ -132,7 +132,7 @@ find_families(
 - If NULL: Uses default panel (18 families across all supports)
 - Default panel includes:
   - Count: `PO`, `NBI`, `ZIP`, `ZINBI`, `ZIP2`, `BI`, `BB`
-  - Unit: `BE`, `BEINF`, `BEO`, `BEZI`, `BEo`, `BEINF0`
+  - Unit: `BE`, `BEINF`, `BEZI`, `BEo`, `BEINF0`, `BEINF1`
   - Positive: `GA`, `GG`, `IG`, `LOGNO`
   - Real: `NO`, `TF`, `GU`
 

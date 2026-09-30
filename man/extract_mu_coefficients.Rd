@@ -13,8 +13,9 @@ extract_mu_coefficients(fit)
 Tibble with columns: term, effect, se, stat, pval.
 }
 \description{
-Robustly extracts coefficient estimates, standard errors, test statistics,
-and p-values from `summary(fit, what = "mu")` output. Handles various
-return structures from different GAMLSS versions.
+Primary path: mu coefficients from `coef()` plus the robust
+\eqn{(X^\top W X)^{-1}} covariance (scope-safe). Falls back to parsing
+`summary(fit, what = "mu")` (with t-derived p-values) only when the robust
+covariance cannot be built.
 }
 \keyword{internal}

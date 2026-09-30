@@ -79,31 +79,60 @@ test_that("transform_for_family_strict handles positive families correctly", {
 test_that("transform_for_family_strict handles unit families correctly", {
   unit_data <- c(0.1, 0.3, 0.5, 0.7, 0.9)
 
-  # Beta
+  # Beta: identity on the original scale, no rescaling, zero Jacobian
   tr_be <- transform_for_family_strict(unit_data, "BE")
-  expect_true(all(tr_be$y > 0 & tr_be$y < 1))
+  expect_equal(tr_be$y, unit_data)
   expect_true(all(tr_be$mask))
-  expect_true(is.finite(sum(tr_be$logJ_per_obs)))
+  expect_equal(sum(tr_be$logJ_per_obs), 0)
+  expect_equal(tr_be$meta$kind, "identity")
 })
 
-test_that("transform_for_family_strict keeps zero samples for BE via unconditional eps nudge", {
-  # Minmax maps min→0, max→1; for BE the min sample must not be excluded
-  unit_with_zeros <- c(0, 0.2, 0.5, 0.8, 1.0)
+test_that("transform_for_family_strict handles exact 0/1 per unit family", {
+  y <- c(0, 0.2, 0.5, 0.8, 1)
 
-  # Default allow_eps=TRUE
-  tr_be <- transform_for_family_strict(unit_with_zeros, "BE")
-  expect_true(all(tr_be$mask), info = "All samples must be valid for BE with zeros")
-  expect_true(all(tr_be$y > 0 & tr_be$y < 1), info = "All transformed values must be in open (0,1)")
+  # BE: 0/1 nudged inside (0,1) with allow_eps = TRUE ...
+  tr_be <- transform_for_family_strict(y, "BE")
+  expect_true(all(tr_be$mask))
+  expect_equal(tr_be$y[2:4], y[2:4])
+  expect_true(all(tr_be$y > 0 & tr_be$y < 1))
 
-  # Explicit allow_eps=FALSE: eps must still be applied for unit families
-  tr_be_noeps <- transform_for_family_strict(unit_with_zeros, "BE", allow_eps = FALSE)
-  expect_true(all(tr_be_noeps$mask), info = "Zeros must not be excluded even with allow_eps=FALSE for unit families")
-  expect_true(all(tr_be_noeps$y > 0 & tr_be_noeps$y < 1))
+  # ... and excluded with allow_eps = FALSE
+  tr_be_noeps <- transform_for_family_strict(y, "BE", allow_eps = FALSE)
+  expect_equal(tr_be_noeps$mask, c(FALSE, TRUE, TRUE, TRUE, FALSE))
 
-  # BEO (allows ones, not zeros): zero sample must also be kept
-  tr_beo <- transform_for_family_strict(unit_with_zeros, "BEO")
-  expect_true(all(tr_beo$mask))
-  expect_true(all(tr_beo$y > 0 & tr_beo$y <= 1))
+  # BEo has support (0,1): same as BE
+  expect_equal(transform_for_family_strict(y, "BEo", allow_eps = FALSE)$mask,
+               c(FALSE, TRUE, TRUE, TRUE, FALSE))
+
+  # Zero-inflated families keep exact 0, one-inflated keep exact 1
+  for (fam in c("BEZI", "BEINF0")) {
+    tr <- transform_for_family_strict(y, fam, allow_eps = FALSE)
+    expect_equal(tr$mask, c(TRUE, TRUE, TRUE, TRUE, FALSE), info = fam)
+    expect_equal(tr$y[1], 0, info = fam)
+  }
+  tr_one <- transform_for_family_strict(y, "BEINF1", allow_eps = FALSE)
+  expect_equal(tr_one$mask, c(FALSE, TRUE, TRUE, TRUE, TRUE))
+
+  # BEINF keeps both boundaries untouched
+  tr_inf <- transform_for_family_strict(y, "BEINF")
+  expect_equal(tr_inf$y, y)
+  expect_true(all(tr_inf$mask))
+
+  # Values outside [0,1] are never valid in strict mode
+  expect_equal(transform_for_family_strict(c(-0.1, 0.5, 1.2), "BEINF")$mask,
+               c(FALSE, TRUE, FALSE))
+})
+
+test_that("strict beta is not favoured by nudged zeros over the zero-inflated beta", {
+  set.seed(7)
+  y <- rbeta(100, 2, 5)
+  y[sample(100, 20)] <- 0
+
+  flt <- filter_candidate_families(y, default_candidate_families(), group_by_support = TRUE)
+  expect_setequal(flt$families_to_test, c("BEZI", "BEINF0"))
+
+  res <- compare_families_on_feature(y, flt$families_to_test, criterion = "BIC")
+  expect_true(res$best_family %in% c("BEZI", "BEINF0"))
 })
 
 test_that("transform_for_family_strict handles real families correctly", {
@@ -148,7 +177,7 @@ test_that("transform_for_family_strict handles edge cases", {
 })
 
 test_that("infer_support correctly identifies zi_positive data", {
-  # Zeros + positive non-integer values (ZILN/ZAGA/ZAIG type)
+  # Zeros + positive non-integer values (ZAGA/ZAIG type)
   ziln_like <- c(0, 0, 1.5, 3.2, 0, 5.1, 12.7)
   expect_equal(infer_support(ziln_like), "zi_positive")
 
@@ -170,11 +199,11 @@ test_that("infer_support correctly identifies zi_positive data", {
 })
 
 test_that("transform_for_family_strict handles zi_positive families", {
-  # ZILN-like data: zeros + positive continuous
-  ziln_data <- c(0, 0, 1.5, 3.2, 0, 8.7, 15.1)
+  # Zero-adjusted data: zeros + positive continuous
+  za_data <- c(0, 0, 1.5, 3.2, 0, 8.7, 15.1)
 
-  tr <- transform_for_family_strict(ziln_data, "ZILN")
-  expect_equal(tr$y, ziln_data)                    # identity transform
+  tr <- transform_for_family_strict(za_data, "ZAGA")
+  expect_equal(tr$y, za_data)                      # identity transform
   expect_true(all(tr$mask))                        # all values >= 0, all valid
   expect_equal(sum(tr$logJ_per_obs), 0)            # zero Jacobian for identity
 
@@ -202,8 +231,8 @@ test_that("family_groups returns correct categorization", {
   expect_true("GA"   %in% groups$positive)
   expect_true("LOGNO" %in% groups$positive)
   expect_true("BE"   %in% groups$unit)
+  expect_true("BEINF1" %in% groups$unit)
   expect_true("NO"   %in% groups$real)
-  expect_true("ZILN" %in% groups$zi_positive)
   expect_true("ZAGA" %in% groups$zi_positive)
   expect_true("ZAIG" %in% groups$zi_positive)
 })

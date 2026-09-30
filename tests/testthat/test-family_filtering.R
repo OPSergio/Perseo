@@ -135,7 +135,7 @@ test_that("filter_candidate_families with MATERIAL zeros restricts zi_positive t
   # hides the zeros). To prevent that cheat, candidates are restricted to the
   # zero-adjusted families that model the zero process explicitly.
   zi_data <- c(0, 0, 1.5, 3.2, 0, 8.7, 15.1)
-  all_families <- c("ZILN", "ZAGA", "ZAIG", "GA", "LOGNO", "IG", "NO")
+  all_families <- c("ZAGA", "ZAIG", "GA", "LOGNO", "IG", "NO")
 
   filtered <- filter_candidate_families(
     zi_data,
@@ -146,7 +146,7 @@ test_that("filter_candidate_families with MATERIAL zeros restricts zi_positive t
   expect_equal(filtered$support, "zi_positive")
 
   # Only zero-adjusted families survive material zeros
-  expect_setequal(filtered$families_to_test, c("ZILN", "ZAGA", "ZAIG"))
+  expect_setequal(filtered$families_to_test, c("ZAGA", "ZAIG"))
 
   # Positive continuous families are dropped (they would cheat via the nudge)
   expect_false(any(c("GA", "LOGNO", "IG") %in% filtered$families_to_test))
@@ -175,4 +175,21 @@ test_that("filter_candidate_families handles edge cases", {
   )
   # Should return families (variation check happens in compare_families_*)
   expect_true(length(filtered_na$families_to_test) >= 0)
+})
+
+test_that("filter_candidate_families matches unit families to the observed 0/1", {
+  fams <- default_candidate_families()
+  base <- c(0.12, 0.25, 0.33, 0.41, 0.56, 0.62, 0.78, 0.85)
+  unit_fams <- function(y) {
+    filter_candidate_families(y, fams, group_by_support = TRUE)$families_to_test
+  }
+
+  expect_setequal(unit_fams(base), "BE")
+  expect_setequal(unit_fams(c(0, 0, base)), c("BEZI", "BEINF0"))
+  expect_setequal(unit_fams(c(base, 1, 1)), "BEINF1")
+  expect_setequal(unit_fams(c(0, base, 1)), "BEINF")
+
+  # Material zeros also drop non-unit families when group_by_support = FALSE
+  loose <- filter_candidate_families(c(0, 0, base), fams, group_by_support = FALSE)
+  expect_setequal(loose$families_to_test, c("BEZI", "BEINF0"))
 })

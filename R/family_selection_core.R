@@ -416,6 +416,7 @@ bind_bootstrap_results <- function(results_list) {
 #' @param show_progress Logical; print summary report if TRUE.
 #'
 #' @return List with frequency tables, proportions, and top families.
+#' @importFrom dplyr %>%
 #' @keywords internal
 summarize_family_frequencies <- function(sampled_results, top_n, show_progress = FALSE) {
   fitted <- sampled_results %>%

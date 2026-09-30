@@ -9,9 +9,11 @@
 #' @param group_by_support Logical; if TRUE, restricts families to those
 #'   matching the empirical support inferred from `y`. If FALSE, all families
 #'   in `families` are retained (subject only to beta inflation filtering).
-#' @param filter_beta_inflated Logical; if TRUE and support is "unit", removes
-#'   inflated beta families (BEINF, BEZI, etc.) when there is insufficient
-#'   evidence of zero/one inflation.
+#' @param filter_beta_inflated Logical; if TRUE and support is "unit", keeps
+#'   only the beta families whose point masses match the observed exact 0/1:
+#'   BE/BEo without 0/1, BEZI/BEINF0 with zeros, BEINF1 with ones, BEINF with
+#'   both. Also applies the analogous zero-inflation rules to count, positive
+#'   and zi_positive support.
 #' @param thr_zero Numeric threshold for declaring zero inflation (proportion
 #'   of exact zeros required).
 #' @param thr_one Numeric threshold for declaring one inflation (proportion
@@ -62,11 +64,25 @@ filter_candidate_families <- function(feature_vec,
       p_zero <- mean(y_finite == 0)
       p_one  <- mean(y_finite == 1)
 
-      # Unit support: drop inflated beta when no 0/1 evidence
-      if (identical(support, "unit") && !is.na(p_zero) && !is.na(p_one) &&
-          p_zero < thr_zero && p_one < thr_one) {
-        eligible_families <- setdiff(eligible_families,
-                                     c("BEINF", "BEZI", "BEINF0", "BEO", "BEo"))
+      # Unit support: keep the beta families whose point masses match the
+      # observed exact 0/1. Without 0/1 evidence the inflated families are
+      # dropped. With MATERIAL 0s or 1s, a family without a point mass there
+      # only "fits" them through the epsilon-nudge (a J-shaped beta puts a
+      # density spike at eps and beats the inflated family on IC), so the
+      # candidates are restricted to the matching inflated families.
+      if (identical(support, "unit") && !is.na(p_zero) && !is.na(p_one)) {
+        has_zero <- p_zero >= thr_zero
+        has_one  <- p_one  >= thr_one
+        unit_fams <- intersect(eligible_families, family_groups()[["unit"]])
+        matches <- vapply(unit_fams, function(f) {
+          allows <- unit_family_allows(f)
+          allows$zero == has_zero && allows$one == has_one
+        }, logical(1))
+        if (!has_zero && !has_one) {
+          eligible_families <- setdiff(eligible_families, unit_fams[!matches])
+        } else if (any(matches)) {
+          eligible_families <- unit_fams[matches]
+        }
       }
 
       # Count support: drop ZIP/ZINBI when no zero-inflation evidence

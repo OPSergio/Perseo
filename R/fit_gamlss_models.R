@@ -880,11 +880,10 @@ fit_gamlss_models <- function(counts_matrix,
   # ---- Aggregate results and compute FDR per term ----
   results_df <- dplyr::bind_rows(lapply(valid_list, `[[`, "coef_df"))
   if (nrow(results_df) > 0 && "pval" %in% names(results_df)) {
-    results_df <- dplyr::mutate(
+    results_df <- dplyr::ungroup(dplyr::mutate(
       dplyr::group_by(results_df, term),
-      padj = p.adjust(pval, method = p_adjust),
-      .groups = "drop"
-    )
+      padj = p.adjust(pval, method = p_adjust)
+    ))
   } else {
     results_df$padj <- NA_real_
   }
@@ -918,11 +917,10 @@ fit_gamlss_models <- function(counts_matrix,
     
     if (nrow(contrasts_df) > 0 && "p_value" %in% names(contrasts_df)) {
       # CRITICAL: This grouping logic is UNCHANGED from original PERSEO
-      contrasts_df <- dplyr::mutate(
+      contrasts_df <- dplyr::ungroup(dplyr::mutate(
         dplyr::group_by(contrasts_df, contrast),
-        p_adj = p.adjust(p_value, method = p_adjust),
-        .groups = "drop"
-      )
+        p_adj = p.adjust(p_value, method = p_adjust)
+      ))
     } else {
       contrasts_df$p_adj <- NA_real_
     }

@@ -56,7 +56,7 @@ a validity mask, per-observation Jacobian, and metadata for inversion.
 - **Positive continuous** (GA, GG, LOGNO, IG): If min(y) <= 0, apply global shift
   b = -min(y) + eps, a = 1. Result: (eps, +∞).
 
-- **Unit interval** (BE, BEINF, BEO, BEZI, BEo, BEINF0): Global min-max scaling
+- **Unit interval** (BE, BEINF, BEZI, BEo, BEINF0, BEINF1): Global min-max scaling
   a = 1/(max(y) - min(y)), b = -min(y) * a. Optionally shift for epsilon.
 
 - **Real-valued** (NO, TF, GU): Z-score standardization (same as strict).

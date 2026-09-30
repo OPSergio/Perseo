@@ -36,7 +36,7 @@
 #' - **Positive continuous** (GA, GG, LOGNO, IG): If min(y) <= 0, apply global shift
 #'   b = -min(y) + eps, a = 1. Result: (eps, +∞).
 #'
-#' - **Unit interval** (BE, BEINF, BEO, BEZI, BEo, BEINF0): Global min-max scaling
+#' - **Unit interval** (BE, BEINF, BEZI, BEo, BEINF0, BEINF1): Global min-max scaling
 #'   a = 1/(max(y) - min(y)), b = -min(y) * a. Optionally shift for epsilon.
 #'
 #' - **Real-valued** (NO, TF, GU): Z-score standardization (same as strict).
@@ -59,9 +59,9 @@ transform_response <- function(y, fam, mode = c("strict", "safe"), eps = 1e-6, a
   finite_y <- is.finite(y)
   
   fam_count       <- c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG")
-  fam_unit        <- c("BE","BEINF","BEO","BEZI","BEo","BEINF0")
+  fam_unit        <- c("BE","BEINF","BEZI","BEo","BEINF0","BEINF1")
   fam_positive    <- c("GA","GG","LOGNO","IG")
-  fam_zi_positive <- c("ZILN","ZAGA","ZAIG")
+  fam_zi_positive <- c("ZAGA","ZAIG")
   fam_real        <- c("NO","TF","GU")
 
   # Zero-inflated positive continuous: identity (zeros are structural, keep them)
@@ -102,8 +102,8 @@ transform_response <- function(y, fam, mode = c("strict", "safe"), eps = 1e-6, a
     }
     
     # Check if family allows 0 or 1
-    allow_zero <- fam %in% c("BEINF", "BEZI", "BEINF0")
-    allow_one  <- fam %in% c("BEINF", "BEo", "BEINF0")
+    allow_zero <- unit_family_allows(fam)$zero
+    allow_one  <- unit_family_allows(fam)$one
     
     # Single global affine transform: z = a*y + b
     # If epsilon padding needed, adjust the scaling factor and offset
@@ -178,8 +178,8 @@ transform_response <- function(y, fam, mode = c("strict", "safe"), eps = 1e-6, a
 #' @return Numeric vector transformed (same length as `y`).
 #' @export
 transform_for_family <- function(y, fam, strategy = "safe", eps = 1e-6) {
-  # [0, ∞) – zero-inflated positive continuous (ZILN, ZAGA, ZAIG)
-  if (fam %in% c("ZILN", "ZAGA", "ZAIG")) {
+  # [0, ∞) – zero-inflated positive continuous (ZAGA, ZAIG)
+  if (fam %in% c("ZAGA", "ZAIG")) {
     if (strategy == "strict") {
       y[y < 0] <- NA
     }
@@ -207,14 +207,14 @@ transform_for_family <- function(y, fam, strategy = "safe", eps = 1e-6) {
     return(y)
   }
 
-  # C: (0,1) or inflated – proportions (BE, BEINF, BEO, BEZI, BEo, BEINF0)
-  if (fam %in% c("BE", "BEINF", "BEO", "BEZI", "BEo", "BEINF0")) {
+  # C: (0,1) or inflated – proportions (BE, BEINF, BEZI, BEo, BEINF0, BEINF1)
+  if (fam %in% c("BE", "BEINF", "BEZI", "BEo", "BEINF0", "BEINF1")) {
     rng <- max(y, na.rm = TRUE) - min(y, na.rm = TRUE)
     y <- (y - min(y, na.rm = TRUE)) / (rng + eps)
 
     if (strategy == "safe") {
-      allow_zero <- fam %in% c("BEINF", "BEZI", "BEINF0")
-      allow_one  <- fam %in% c("BEINF", "BEo", "BEINF0")
+      allow_zero <- unit_family_allows(fam)$zero
+      allow_one  <- unit_family_allows(fam)$one
       if (!allow_zero) y[y <= 0] <- eps
       if (!allow_one)  y[y >= 1] <- 1 - eps
     } else {
@@ -244,8 +244,10 @@ transform_for_family <- function(y, fam, strategy = "safe", eps = 1e-6) {
 #' Families:
 #' - Counts: \code{PO, NBI, ZIP, ZINBI, ZIP2, BI, BB} → identity (valid if integer ≥ 0)
 #' - Positive: \code{GA, GG, LOGNO, IG} → identity (valid if y > 0)
-#' - Unit interval and inflated: \code{BE, BEINF, BEO, BEZI, BEo, BEINF0}
-#'     → min–max to (0,1), Jacobian \eqn{-\log(b-a)}, validity depends on inflation
+#' - Unit interval and inflated: \code{BE, BEINF, BEZI, BEo, BEINF0, BEINF1}
+#'     → identity; valid in (0,1), plus exact 0 for \code{BEINF, BEZI, BEINF0}
+#'     and exact 1 for \code{BEINF, BEINF1}. With \code{allow_eps = TRUE},
+#'     unsupported exact 0/1 are nudged by \code{eps}; otherwise they are masked.
 #' - Real: \code{NO, TF, GU} → z-score standardization with sd > 0,
 #'     Jacobian \eqn{-\log(sd)}.
 #'
@@ -265,9 +267,9 @@ transform_for_family_strict <- function(y, fam, eps = 1e-6, allow_eps = TRUE) {
   finite_y <- is.finite(y)
 
   fam_count       <- c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG")
-  fam_unit        <- c("BE","BEINF","BEO","BEZI","BEo","BEINF0")
+  fam_unit        <- c("BE","BEINF","BEZI","BEo","BEINF0","BEINF1")
   fam_positive    <- c("GA","GG","LOGNO","IG")
-  fam_zi_positive <- c("ZILN","ZAGA","ZAIG")
+  fam_zi_positive <- c("ZAGA","ZAIG")
   fam_real        <- c("NO","TF","GU")
 
   # Zero-inflated positive continuous: identity; valid if y >= 0
@@ -310,38 +312,25 @@ transform_for_family_strict <- function(y, fam, eps = 1e-6, allow_eps = TRUE) {
     return(list(y = z, mask = mask, logJ_per_obs = logJ, meta = meta))
   }
 
-  # Unit interval (and inflated variants): min–max if range > 0
+  # Unit interval: identity on the original scale (no rescaling, so no
+  # artificial 0/1 at the sample min/max). Exact 0/1 are valid only for
+  # families with a point mass there; for the others they are nudged inside
+  # (0,1) when allow_eps = TRUE, otherwise excluded by the mask. Values
+  # outside [0,1] are always excluded.
   if (fam %in% fam_unit) {
-    yy <- y[finite_y]
-    a <- suppressWarnings(min(yy, na.rm = TRUE))
-    b <- suppressWarnings(max(yy, na.rm = TRUE))
-    if (!is.finite(a) || !is.finite(b) || b <= a) {
-      return(list(
-        y = rep(NA_real_, n),
-        mask = rep(FALSE, n),
-        logJ_per_obs = rep(-Inf, n),
-        meta = list(kind = "minmax", params = list(min = NA_real_, max = NA_real_))
-      ))
+    allows <- unit_family_allows(fam)
+    z <- y
+    if (allow_eps) {
+      if (!allows$zero) z[finite_y & y == 0] <- eps
+      if (!allows$one)  z[finite_y & y == 1] <- 1 - eps
     }
+    lower_ok <- if (allows$zero) z >= 0 else z > 0
+    upper_ok <- if (allows$one)  z <= 1 else z < 1
+    mask <- finite_y & lower_ok & upper_ok
 
-    z_all <- (y - a) / (b - a)
-
-    allow_zero <- fam %in% c("BEINF", "BEZI", "BEINF0")
-    allow_one  <- fam %in% c("BEINF", "BEo", "BEINF0")
-
-    # Minmax always maps the data minimum to 0 and maximum to 1, so boundary
-    # values at exactly 0 or 1 are an artifact of the transform, not invalid
-    # data. Nudge unconditionally to keep those samples in strict mode.
-    if (!allow_zero) z_all[z_all <= 0] <- eps
-    if (!allow_one)  z_all[z_all >= 1] <- 1 - eps
-
-    mask <- is.finite(z_all)
-    mask <- mask & if (allow_zero) z_all >= 0 else z_all > 0
-    mask <- mask & if (allow_one)  z_all <= 1 else z_all < 1
-
-    logJ <- rep(-log(b - a), n)
-    meta <- list(kind = "minmax", params = list(min = a, max = b))
-    return(list(y = z_all, mask = mask, logJ_per_obs = logJ, meta = meta))
+    logJ <- rep(0, n)
+    meta <- list(kind = "identity", params = list())
+    return(list(y = z, mask = mask, logJ_per_obs = logJ, meta = meta))
   }
 
   # Real-valued: z-score standardization
@@ -403,6 +392,19 @@ inverse_transform <- function(z, meta) {
 }
 
 
+#' Exact boundaries a unit-interval family can represent as a point mass
+#'
+#' @param fam Character GAMLSS family name.
+#' @return List with logicals \code{zero} and \code{one}.
+#' @keywords internal
+unit_family_allows <- function(fam) {
+  list(
+    zero = fam %in% c("BEINF", "BEZI", "BEINF0"),
+    one  = fam %in% c("BEINF", "BEINF1")
+  )
+}
+
+
 #' Family groups by theoretical support
 #'
 #' @return List with character vectors of families by support: count, unit, positive, real.
@@ -410,9 +412,9 @@ inverse_transform <- function(z, meta) {
 family_groups <- function() {
   list(
     count       = c("PO","NBI","ZIP","ZINBI","ZIP2","BI","BB","PIG"),
-    unit        = c("BE","BEINF","BEO","BEZI","BEo","BEINF0"),
+    unit        = c("BE","BEINF","BEZI","BEo","BEINF0","BEINF1"),
     positive    = c("GA","GG","LOGNO","IG","NO","TF","GU"),
-    zi_positive = c("ZILN","ZAGA","ZAIG"),
+    zi_positive = c("ZAGA","ZAIG"),
     real        = c("NO","TF","GU")
   )
 }

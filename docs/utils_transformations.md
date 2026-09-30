@@ -48,10 +48,12 @@ Enforces theoretical domain constraints without data modification:
   - Validity: `y > 0`
   - Jacobian: `log|∂z/∂y| = 0`
 
-- **Unit interval families** (`BE`, `BEINF`, `BEO`, `BEZI`, `BEo`, `BEINF0`):
-  - Transform: Min-max scaling `z = (y - a)/(b - a)` where `a = min(y)`, `b = max(y)`
-  - Validity: Depends on inflation variant (`0 < z < 1` for `BE`, `0 ≤ z < 1` for `BEINF`, etc.)
-  - Jacobian: `log|∂z/∂y| = -log(b - a)` (constant across observations)
+- **Unit interval families** (`BE`, `BEINF`, `BEZI`, `BEo`, `BEINF0`, `BEINF1`):
+  - Transform: Identity `z = y` (no rescaling, so the sample min/max do not become artificial 0/1)
+  - Validity: `0 < y < 1`, plus exact `0` for `BEINF`, `BEZI`, `BEINF0` and exact `1` for `BEINF`, `BEINF1`.
+    Values outside `[0, 1]` are masked. Unsupported exact 0/1 are nudged by `ε` when
+    `allow_eps = TRUE`, otherwise masked.
+  - Jacobian: `log|∂z/∂y| = 0`
 
 - **Real-valued families** (`NO`, `TF`, `GU`):
   - Transform: Z-score standardization `z = (y - μ)/σ` where `μ = mean(y)`, `σ = sd(y)`
@@ -68,7 +70,7 @@ Applies global affine transformations `z = ay + b` with `a > 0`:
   - Result: `z ∈ (ε, +∞)`
   - Jacobian: `log|∂z/∂y| = log(a) = 0`
 
-- **Unit interval families** (`BE`, `BEINF`, `BEO`, `BEZI`, `BEo`, `BEINF0`):
+- **Unit interval families** (`BE`, `BEINF`, `BEZI`, `BEo`, `BEINF0`, `BEINF1`):
   - Without epsilon: `a = 1/(max(y) - min(y))`, `b = -min(y) · a`
   - With epsilon (when 0 or 1 excluded): `a = (1 - 2ε)/(max(y) - min(y))`, `b = ε - min(y) · a`
   - Result: `z ∈ [0, 1]` or `z ∈ [ε, 1-ε]` depending on family
@@ -203,7 +205,7 @@ Returns GAMLSS families partitioned by theoretical support.
 
 List with four named elements:
 - `count`: Character vector of count families (`"PO"`, `"NBI"`, `"ZIP"`, `"ZINBI"`, `"ZIP2"`, `"BI"`, `"BB"`)
-- `unit`: Character vector of unit interval families (`"BE"`, `"BEINF"`, `"BEO"`, `"BEZI"`, `"BEo"`, `"BEINF0"`)
+- `unit`: Character vector of unit interval families (`"BE"`, `"BEINF"`, `"BEZI"`, `"BEo"`, `"BEINF0"`, `"BEINF1"`)
 - `positive`: Character vector of positive continuous families (`"GA"`, `"GG"`, `"LOGNO"`, `"IG"`)
 - `real`: Character vector of real-valued families (`"NO"`, `"TF"`, `"GU"`)
 
@@ -394,10 +396,10 @@ Alternative approach (family-specific masks) would confound model fit quality wi
 |--------|-----------|--------|-----------|
 | BE | Beta | (0, 1) | No |
 | BEINF | Beta Inflated | [0, 1] | At 0 and 1 |
-| BEO | Beta Inflated at One | (0, 1] | At 1 |
-| BEZI | Beta Inflated at Zero | [0, 1) | At 0 |
-| BEo | One-Inflated Beta (alt) | (0, 1] | At 1 |
-| BEINF0 | Zero-One Inflated Beta (alt) | [0, 1] | At 0 and 1 |
+| BEZI | Zero-Inflated Beta | [0, 1) | At 0 |
+| BEINF0 | Beta Inflated at Zero | [0, 1) | At 0 |
+| BEINF1 | Beta Inflated at One | (0, 1] | At 1 |
+| BEo | Beta, original parametrisation (mu, sigma = shapes) | (0, 1) | No (not a default) |
 
 ### Positive Continuous Families
 

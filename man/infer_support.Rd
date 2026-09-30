@@ -10,7 +10,7 @@ infer_support(y)
 \item{y}{Numeric vector.}
 }
 \value{
-One of "count", "unit", "positive", "real", or "none".
+One of "count", "unit", "positive", "zi_positive", "real", or "none".
 }
 \description{
 Infer empirical support of a response vector

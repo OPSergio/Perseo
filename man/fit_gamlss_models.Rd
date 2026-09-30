@@ -22,7 +22,11 @@ fit_gamlss_models(
   parallel = FALSE,
   show_progress = TRUE,
   progress_label = "Fitting features",
-  transform_mode = "strict"
+  transform_mode = "strict",
+  group_by_support = FALSE,
+  filter_beta_inflated = TRUE,
+  thr_zero = 0.005,
+  thr_one = 0.005
 )
 }
 \arguments{

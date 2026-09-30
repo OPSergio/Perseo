@@ -21,6 +21,8 @@
 
 **PERSEO** Automated model selection and differential expression analysis for omics data using **GAMLSS** (Generalized Additive Models for Location, Scale and Shape). It supports overdispersed, skewed, or otherwise non-standard distributions, allowing for better model fit and more accurate inference.
 
+> **LLMs / AI agents:** read [AGENTS.md](AGENTS.md) instead of this README.
+
 ---
 
 ## Table of Contents
@@ -902,7 +904,7 @@ A: `effect` is the coefficient estimate on the **link scale** (not directly inte
 A: Yes! PERSEO supports:
 - **Count data**: RNA-seq counts → NBI, PO, ZIP, ZINBI
 - **Positive continuous**: Proteomics intensities → GG, GA, LOGNO, IG
-- **Unit interval**: Beta values, proportions → BE, BEINF, BEO
+- **Unit interval**: Beta values, proportions → BE, BEINF, BEZI
 - **Real-valued**: Normalized/transformed data → NO, TF
 
 Use `group_by_support = TRUE` to restrict families by empirical support.

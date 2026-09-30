@@ -1,0 +1,26 @@
+# PERSEO
+
+> R package (`PERSEO`, R >= 4.2) for differential expression/abundance on omics feature x sample matrices. It fits several GAMLSS distribution families per feature (NBI, PO, GA, GG, LOGNO, BE, NO, TF, ...), keeps the one with the lowest Jacobian-corrected BIC/AIC/GAIC on a common observation mask, and reports per-coefficient Wald tests, pairwise contrasts and an optional omnibus gate, with BH FDR.
+
+- Install: `remotes::install_github("OPSergio/Perseo")`
+- Entry point: `run_perseo(counts_matrix, design_matrix = "~ group + batch", metadata, contrast_variable = "group", show_progress = FALSE)`
+- Coefficient table columns are `pval`/`padj`. Contrast and omnibus tables use `p_value`/`p_adj`.
+- Metadata rows are matched to count columns by position.
+- Agent skill (Agent Skills format: SKILL.md + references + scripts) ships inside the package: `system.file("skills/perseo", package = "PERSEO")`. To install it, copy that folder into your agent's skills directory (e.g. `~/.claude/skills/perseo`).
+
+## Agent skill
+
+- [SKILL.md](https://raw.githubusercontent.com/OPSergio/Perseo/main/inst/skills/perseo/SKILL.md): start here. Workflow, input contract, output schema, verified pitfalls, token discipline
+- [perseo_run.R](https://raw.githubusercontent.com/OPSergio/Perseo/main/inst/skills/perseo/scripts/perseo_run.R): CLI runner that validates inputs (`--check`), fits, writes CSVs and prints a ~30-line summary
+
+## Reference
+
+- [API](https://raw.githubusercontent.com/OPSergio/Perseo/main/inst/skills/perseo/references/api.md): all exported functions, arguments, defaults, family sets
+- [Interpretation](https://raw.githubusercontent.com/OPSergio/Perseo/main/inst/skills/perseo/references/interpretation.md): effect scale per family, FDR scheme, NA and skip causes, reporting checklist
+- [Methods](https://raw.githubusercontent.com/OPSergio/Perseo/main/inst/skills/perseo/references/methods.md): support inference, filtering, transforms, Jacobian IC, tie-break, covariance
+
+## Optional
+
+- [AGENTS.md](https://raw.githubusercontent.com/OPSergio/Perseo/main/AGENTS.md): instructions for agents developing PERSEO
+- [Source code](https://github.com/OPSergio/Perseo/tree/main/R): `run_perseo.R`, `fit_gamlss_models.R`, `find_families.R`, `utils_transformations.R`
+- [CHANGELOG](https://raw.githubusercontent.com/OPSergio/Perseo/main/CHANGELOG.md)

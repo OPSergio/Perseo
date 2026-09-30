@@ -8,6 +8,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Agent skill** in `inst/skills/perseo/`, installed with the package
+  (`system.file("skills/perseo", package = "PERSEO")`). It contains `SKILL.md` (workflow,
+  input contract, output schema, pitfalls), `references/` (API, interpretation, methods) and
+  `scripts/perseo_run.R`, a CLI runner that validates inputs (`--check`), runs pilots
+  (`--subset`), writes all tables to disk and prints a compact summary.
+- `AGENTS.md` with instructions for AI agents, and `llms.txt` as an index for LLMs. The README
+  now points agents to `AGENTS.md`.
+
+### Fixed
+
+- `run_perseo()` and `find_families()` failed with `could not find function "%>%"` unless
+  dplyr was attached. The pipe is now imported from dplyr (`importFrom(dplyr, "%>%")`).
+- `fit_gamlss_models()` returned `results` and `contrasts` as grouped tibbles with a spurious
+  `.groups` column, because `.groups = "drop"` was passed to `mutate()`. They are now
+  ungrouped and contain only the documented columns.
+- Removed `ZILN` and `BEO` from the default candidate families, `family_groups()`, the
+  transformation rules and the inflated-beta filter. Neither exists in `gamlss.dist`, so they
+  were silently skipped.
+- Report template: fixed the description of `BEo` (Beta, original parametrisation, not
+  zero-inflated) and of identity-link effects (standard deviations of the z-scored feature,
+  not raw differences).
+- **Proportions were always assigned a beta family, for the wrong reasons.** Strict mode
+  rescaled unit-interval data with min-max, which always creates an artificial 0 and 1 at the
+  sample extremes, and then nudged them unconditionally (even with `allow_eps = FALSE`). With
+  real zeros, BE "fitted" the nudged zeros with a density spike at 1e-6 and beat the
+  zero-inflated beta by hundreds of IC units: 20% zeros added +179 to BE's log-likelihood.
+  Changes:
+  - Strict unit transform is now the identity on the original proportions: no min-max and no
+    Jacobian. Values outside [0,1] are masked. Exact 0/1 are kept only for families with a
+    point mass there; for the others they are nudged when `allow_eps = TRUE`, otherwise masked.
+  - Point-mass support corrected: `BEINF` allows 0 and 1, `BEZI`/`BEINF0` only 0, `BEINF1` only 1,
+    and `BE`/`BEo` neither. `BEo` and `BEINF0` were treated as allowing 1, so their fits always
+    failed.
+  - `filter_beta_inflated` now keeps only the beta families whose point masses match the observed
+    material 0s/1s (`BE` without them, `BEZI`/`BEINF0` with zeros, `BEINF1` with ones, `BEINF`
+    with both), mirroring the existing `zi_positive` rule.
+  - Beta effects are now log odds ratios on the original proportion scale instead of on a
+    per-feature rescaled range.
+
+- `find_families()` defaults now match its documentation and `run_perseo()`:
+  `group_by_support = TRUE` and `transform_mode = NULL` (automatic). Before, the signature
+  used `FALSE` / `"strict"`, and that combination compared families of every support on one
+  common mask. Continuous data had 100% of features skipped (count families mask non-integers),
+  and Poisson counts were assigned `BE` (min-max artifact).
+
+### Changed
+
+- Added `BEINF1` (beta inflated at one) to the default candidates, `family_groups()` and the
+  report. This covers what the non-existent `BEO` was meant for.
+- `BEo` removed from the default candidates. It is the same distribution as `BE` (identical IC)
+  but its mu is a shape parameter, so a tie-break win changed the meaning of the effect. It
+  can still be requested explicitly via `families`.
+
+---
+
 ## [1.0.0] - 2026-02-08
 
 First major release of PERSEO.
